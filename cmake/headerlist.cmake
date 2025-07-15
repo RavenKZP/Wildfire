@@ -1,4 +1,5 @@
 set(headers ${headers}
+	include/DrawDebug.h
 	include/Utils.h
 	include/PCH.h
 	include/logger.h
