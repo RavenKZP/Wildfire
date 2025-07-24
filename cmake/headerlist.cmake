@@ -9,4 +9,5 @@ set(headers ${headers}
 	include/Hooks.h
 	include/MCP.h
 	include/Serialization.h
+	include/WildfireMgr.h
 )

@@ -6,6 +6,7 @@ namespace MCP {
 
     void Register();
     void __stdcall RenderSettings();
+    void __stdcall RenderWildfireMgr();
     void __stdcall RenderLog();
 
     inline std::vector<std::string> logLines;

@@ -8,4 +8,5 @@ set(sources ${sources}
 	src/Hooks.cpp
 	src/MCP.cpp
  	src/Serialization.cpp
+	src/WildfireMgr.cpp
 )

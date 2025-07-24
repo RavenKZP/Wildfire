@@ -1,11 +1,13 @@
 #include "logger.h"
 #include "Hooks.h"
 #include "MCP.h"
+#include "Utils.h"
 
 void OnMessage(SKSE::MessagingInterface::Message* message) {
     if (message->type == SKSE::MessagingInterface::kDataLoaded) {
-        Hooks::Decal2::Install();
+        Hooks::InstallAddImpactHooks();
         Hooks::UpdateHook::Install();
+        Utils::InitializeHazards();
         MCP::Register();
     }
     if (message->type == SKSE::MessagingInterface::kNewGame || message->type == SKSE::MessagingInterface::kPostLoadGame) {
