@@ -4,27 +4,59 @@
 
 #include "ClibUtil/singleton.hpp"
 
+static bool VertexCanBurn(RE::TESObjectLAND::LoadedLandData* landData, int quadrant, int vertexIdx) {
+    for (int texIdx = 0; texIdx < 6; ++texIdx) {
+        // Check percent coverage
+        if (landData->percents[quadrant][vertexIdx][texIdx] > 0) {
+            logger::trace("Texture index {} has sufficient coverage", texIdx);
+
+            RE::TESLandTexture* tex = landData->quadTextures[quadrant][texIdx];
+            if (!tex) continue;
+
+            // Check grass list
+            for (const auto& grass : tex->textureGrassList) {
+                if (grass) {
+                    logger::trace("Texture index {} has grass {} {}", texIdx, grass->GetName(), grass->GetFormEditorID());
+                    return true;
+                }
+            }
+            if (!tex->textureGrassList.empty()) {
+                logger::trace("Texture index {} has grass list", texIdx);
+                return true;
+            }
+
+            // Check material type
+            logger::trace("Material type for texture index {}: {}", texIdx, tex->materialType->materialID);
+            if (tex->materialType && tex->materialType->materialID == RE::MATERIAL_ID::kGrass) {
+                logger::trace("Texture index {} has grass material type", texIdx);
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 struct FireCellState {
     float heat[4][289];
     float fuel[4][289];
     bool isBurning[4][289];
-    RE::TESObjectREFR* hazard[4][289];
     bool canBurn[4][289];
     bool isCharred[4][289];
-    bool altered = false;
+    bool altered;
 
-    FireCellState() {
+    FireCellState(RE::TESObjectCELL* cell) {
         auto* set = Settings::GetSingleton();
+        auto cellLand = cell->GetRuntimeData().cellLand;
         for (int q = 0; q < 4; ++q) {
             for (int v = 0; v < 289; ++v) {
                 heat[q][v] = 0.0f;
                 fuel[q][v] = set->InitialFuelAmount;
                 isBurning[q][v] = false;
-                hazard[q][v] = nullptr;
-                canBurn[q][v] = true;
+                canBurn[q][v] = VertexCanBurn(cellLand->loadedData,q,v);
                 isCharred[q][v] = false;
             }
         }
+        altered = false;
     }
 };
 
@@ -54,11 +86,6 @@ private:
 
     std::pair<int, int> GetCellCoords(RE::TESObjectCELL* cell);
     RE::TESObjectCELL* GetCellByCoords(int cellX, int cellY);
-    RE::NiPoint3 GetWorldPosition(const FireVertex& vertex);
-
-    void SpawnFxAtVertex(const FireVertex& vertex, float lifetime, const char* fxModel);
-    void SpawnHazardAtVertex(const FireVertex& vertex, RE::BGSHazard* hazardForm);
-    void DeleteHazardAtVertex(const FireVertex& vertex);
 
     std::unordered_map<RE::TESObjectCELL*, FireCellState> fireCellMap;
 };

@@ -3,6 +3,7 @@
 #include "SKSEMCP/SKSEMenuFramework.hpp"
 #include "Utils.h"
 #include "WildfireMgr.h"
+#include "HazardManager.h"
 
 namespace MCP {
 
@@ -25,39 +26,49 @@ namespace MCP {
     void __stdcall RenderSettings() {
 
         auto* set = Settings::GetSingleton();
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        auto* hazardMgr = HazardMgr::GetSingleton();
 
         ImGui::Checkbox("Mod Active", &set->ModActive);
-        ImGui::SliderFloat("Min Heat To Burn", &set->MinHeatToBurn, 0.0f, 100.0f);
-        ImGui::SliderFloat("Periodic Update Time (s)", &set->PeriodicUpdateTime, 0.1f, 10.0f);
-        ImGui::SliderFloat("Heat Distribution", &set->HeatDistributionFactor, 1.0f, 100.0f);
-        ImGui::SliderFloat("Fuel Consumption Rate", &set->FuelConsumptionRate, 0.1f, 10.0f);
-        ImGui::SliderFloat("Initial Fuel Amount", &set->InitialFuelAmount, 1.0f, 100.0f);
-
+        ImGui::SameLine();
+        ImGui::Checkbox("Debug Mode", &set->DebugMode);
+        ImGui::SliderFloat("Min Heat To Burn", &set->MinHeatToBurn, 1.0f, 100.0f, "%.1f");
+        ImGui::SliderFloat("Periodic Update Time (s)", &set->PeriodicUpdateTime, 0.1f, 10.0f, "%.1f");
+        ImGui::SliderFloat("Heat Distribution", &set->HeatDistributionFactor, 1.0f, 100.0f, "%.1f");
+        ImGui::SliderFloat("Fuel Consumption Rate", &set->FuelConsumptionRate, 0.1f, 10.0f, "%.2f");
+        ImGui::SliderFloat("Initial Fuel Amount", &set->InitialFuelAmount, 1.0f, 100.0f, "%.1f");
+        ImGui::SliderFloat("Fuel To Heat Rate", &set->FuelToHeatRate, 0.01f, 1.0f, "%.2f");
+        ImGui::SliderFloat("Self Heat Loss", &set->SelfHeatLoss, 0.01f, 1.0f, "%.2f");
+        ImGui::SliderFloat("Heat To Big Fire", &set->HeatToBigFire, 1.0f, 500.0f, "%.1f");
+        ImGui::SliderFloat("Damage Multiplayer", &set->DamageMultiplayer, 0.1f, 10.0f, "%.1f");
 
         if (ImGui::Button("Create Grass")) {
             using CreateGrassInCell = void (*)(RE::TESObjectCELL*);
             REL::Relocation<CreateGrassInCell> CreateGrassInCellfunc{REL::RelocationID(13137, 13277)};
-            CreateGrassInCellfunc(RE::PlayerCharacter::GetSingleton()->GetParentCell());
+            CreateGrassInCellfunc(player->GetParentCell());
         }
         if (ImGui::Button("Remove Grass")) {
             using RemoveGrassInCell = void (*)(RE::BGSGrassManager*, RE::TESObjectCELL*);
             REL::Relocation<RemoveGrassInCell> RemoveGrassInCellfunc{REL::RelocationID(15207, 15375)};
-            RemoveGrassInCellfunc(RE::BGSGrassManager::GetSingleton(),
-                                  RE::PlayerCharacter::GetSingleton()->GetParentCell());
+            RemoveGrassInCellfunc(RE::BGSGrassManager::GetSingleton(), player->GetParentCell());
 
         }
-        if (ImGui::Button("Detach Grass From Cell")) {
-            auto toCull =
-                RE::PlayerCharacter::GetSingleton()->GetParentCell()->extraList.GetByType<RE::ExtraCellGrassData>();
-
-            if (toCull) {
-                for (auto grass : toCull->grassHandles) {
-                    grass->triShape->CullGeometry(true);
-                }
-                toCull->grassHandles.clear();
-            }
-            RE::PlayerCharacter::GetSingleton()->GetParentCell()->extraList.RemoveByType(RE::ExtraDataType::kCellGrassData);
+        if (ImGui::Button("FireLgShortHazard")) {
+            auto hazardRef = player->PlaceObjectAtMe(hazardMgr->FireLgShortHazard, false);
         }
+        if (ImGui::Button("FireSmLongHazard")) {
+            auto hazardRef = player->PlaceObjectAtMe(hazardMgr->FireSmLongHazard, false);
+        }
+        if (ImGui::Button("FireSmShortHazard")) {
+            auto hazardRef = player->PlaceObjectAtMe(hazardMgr->FireSmShortHazard, false);
+        }
+        if (ImGui::Button("TrapOilHazard01")) {
+            auto hazardRef = player->PlaceObjectAtMe(hazardMgr->TrapOilHazard01, false);
+        }
+        if (ImGui::Button("FireDragonHazard")) {
+            auto hazardRef = player->PlaceObjectAtMe(hazardMgr->FireDragonHazard, false);
+        }
+
     }
 
     void __stdcall RenderWildfireMgr() {

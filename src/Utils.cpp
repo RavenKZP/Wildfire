@@ -1,70 +1,10 @@
 #include "Utils.h"	
 #include "DrawDebug.h"
+#include "WildfireMgr.h"
 
 #include <unordered_set>
 
 namespace Utils {
-
-    void InitializeHazards() {
-        fireHazard = RE::TESForm::LookupByEditorID("FireLgShortHazard")->As<RE::BGSHazard>();
-    }
-
-    bool new_grass_generated = false;
-
-    const std::unordered_set<RE::FormType>& allowedTypes = {RE::FormType::Static, RE::FormType::MovableStatic,
-                                                            RE::FormType::Flora, RE::FormType::Tree,
-                                                            RE::FormType::Activator};
-
-    std::vector<RE::TESObjectREFR*> GetObjectsInRadius(RE::TESObjectCELL* cell, const RE::NiPoint3& origin,
-                                                       float radius) {
-        std::vector<RE::TESObjectREFR*> results;
-
-        cell->ForEachReferenceInRange(origin, radius, [&](RE::TESObjectREFR* ref) {
-            if (!ref || ref->IsDisabled() || ref->IsDeleted() || ref->IsMarkedForDeletion()) {
-                return RE::BSContainer::ForEachResult::kContinue;
-            }
-
-            if (!allowedTypes.contains(ref->GetBaseObject()->GetFormType())) {
-                logger::trace("Skipping object {} of type {}", ref->GetName(),
-                              FormTypeToString(ref->GetBaseObject()->GetFormType()));
-                return RE::BSContainer::ForEachResult::kContinue;
-            } else {
-                logger::trace("Processing object {} of type {}", ref->GetName(),
-                              FormTypeToString(ref->GetBaseObject()->GetFormType()));
-            }
-
-            results.push_back(ref);
-
-            return RE::BSContainer::ForEachResult::kContinue;
-        });
-        return results;
-    }
-
-    void GetCurrCellGrass() {
-        RE::TESObjectCELL* targetCell = RE::PlayerCharacter::GetSingleton()->GetParentCell();
-
-        RE::ExtraCellGrassData* CellGrassExtraData = targetCell->extraList.GetByType<RE::ExtraCellGrassData>();
-
-        int count = 0;
-        for (auto& extradata : targetCell->extraList) {
-            if (extradata.GetType() == RE::ExtraDataType::kCellGrassData) {
-                count++;
-                logger::info("targetCell has {}, ExtraDataType::kCellGrassData", count);
-            }
-        }
-        auto CellGrass = CellGrassExtraData->grassHandles;
-
-        static auto grass_count = CellGrass.size();
-        if (new_grass_generated) {
-            logger::info("Getting Grass for cell, CellGrass: {}", CellGrass.size());
-            grass_count = CellGrass.size();
-            for (auto grass : CellGrass) {
-               // grass->triShape->CullGeometry(true);
-            }
-            //targetCell->extraList.Remove(CellGrassExtraData);
-        }
-        
-    }
 
     float GetDamageFromProjectile(RE::Projectile* proj) {
         if (!proj) {
@@ -95,6 +35,40 @@ namespace Utils {
         }
 
         return 0.0f;
+    }
+
+    RE::NiPoint3 GetWorldPosition(const FireVertex& vertex) {
+        if (!vertex.cell) return RE::NiPoint3{0.0f, 0.0f, 0.0f};
+
+        // Get cell grid coordinates
+        auto coords = vertex.cell->GetCoordinates();
+        int cellX = coords->cellX;
+        int cellY = coords->cellY;
+
+        // Cell world origin
+        float cellWorldX = cellX * 4096.0f;
+        float cellWorldY = cellY * 4096.0f;
+
+        // Quadrant (qx, qy)
+        int qx = vertex.quadrant % 2;
+        int qy = vertex.quadrant / 2;
+
+        // Quadrant world offset
+        float quadWorldX = cellWorldX + qx * 2048.0f;
+        float quadWorldY = cellWorldY + qy * 2048.0f;
+
+        // Vertex (vx, vy) in quadrant
+        int vx = vertex.vertex % 17;
+        int vy = vertex.vertex / 17;
+
+        // Vertex world offset
+        float vertWorldX = quadWorldX + vx * 128.0f;
+        float vertWorldY = quadWorldY + vy * 128.0f;
+
+        float vertWorldZ = 0.0f;
+        RE::TES::GetSingleton()->GetLandHeight(RE::NiPoint3{vertWorldX, vertWorldY, 0.0f}, vertWorldZ);
+
+        return RE::NiPoint3{vertWorldX, vertWorldY, vertWorldZ};
     }
 
 }  // namespace Utils

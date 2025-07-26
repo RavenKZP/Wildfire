@@ -3,6 +3,7 @@
 #include "Utils.h"
 #include "Settings.h"
 #include "WildfireMgr.h"
+#include "HazardManager.h"
 
 #include <chrono>
 #include <cmath>
@@ -13,6 +14,11 @@ namespace Hooks {
 
     void Process(RE::Projectile* a_proj, const RE::NiPoint3& pos) {
 
+        if (Settings::GetSingleton()->ModActive == false) {
+            return;  // If the mod is inactive, skip processing
+        }
+
+        auto* set = Settings::GetSingleton();
         logger::info("Processing impact at position: ({}, {}, {})", pos.x, pos.y, pos.z);
 
         auto start = std::chrono::high_resolution_clock::now();
@@ -26,7 +32,7 @@ namespace Hooks {
 
         logger::info("Explosion strenght radius: {}", radius);
 
-        float damage = Utils::GetDamageFromProjectile(a_proj) / 2.0f;
+        float damage = Utils::GetDamageFromProjectile(a_proj) * set->DamageMultiplayer;
         WildfireMgr::GetSingleton()->AddFireEvent(pos, radius, damage);
 
 
@@ -34,8 +40,10 @@ namespace Hooks {
         std::chrono::duration<double, std::milli> duration = end - start;
         logger::info("Processed in {} ms", duration.count());
 
-        DebugAPI_IMPL::DebugAPI::DrawSphere(glm::vec3(pos.x, pos.y, pos.z), 50, 5000,
-                                            glm::vec4(1.0f, 0.0f, 0.0f, 1.0f), 2.0f);
+        if (set->DebugMode) {
+            DebugAPI_IMPL::DebugAPI::DrawSphere(glm::vec3(pos.x, pos.y, pos.z), 50, 5000,
+                                                glm::vec4(1.0f, 0.0f, 0.0f, 1.0f), 2.0f);
+        }
     }
 
     void UpdateHook::Update(RE::Actor* a_this, float a_delta) {
@@ -43,17 +51,23 @@ namespace Hooks {
 
         auto* set = Settings::GetSingleton();
 
+        if (!set->ModActive) {
+            return;  // If the mod is inactive, skip the update
+        }
         static float timeAccumulator = 0.0f;
         timeAccumulator += a_delta;
         if (timeAccumulator > set->PeriodicUpdateTime) {
             auto start = std::chrono::high_resolution_clock::now();
             WildfireMgr::GetSingleton()->PeriodicUpdate(timeAccumulator);
+            HazardMgr::GetSingleton()->PeriodicUpdate(timeAccumulator);
             auto end = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double, std::milli> duration = end - start;
             logger::info("Periodic Update in {} ms", duration.count());
             timeAccumulator = 0.0f;
         }
-        DebugAPI_IMPL::DebugAPI::Update();
+        if (set->DebugMode) {
+            DebugAPI_IMPL::DebugAPI::Update();
+        }
     }
 
     void UpdateHook::Install() {

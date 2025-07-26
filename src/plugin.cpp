@@ -2,12 +2,14 @@
 #include "Hooks.h"
 #include "MCP.h"
 #include "Utils.h"
+#include "Settings.h"
+#include "HazardManager.h"
 
 void OnMessage(SKSE::MessagingInterface::Message* message) {
     if (message->type == SKSE::MessagingInterface::kDataLoaded) {
         Hooks::InstallAddImpactHooks();
         Hooks::UpdateHook::Install();
-        Utils::InitializeHazards();
+        HazardMgr::GetSingleton()->InitializeHazards();
         MCP::Register();
     }
     if (message->type == SKSE::MessagingInterface::kNewGame || message->type == SKSE::MessagingInterface::kPostLoadGame) {

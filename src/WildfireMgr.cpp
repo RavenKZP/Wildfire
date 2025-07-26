@@ -1,5 +1,6 @@
 #include "WildfireMgr.h"
 #include "Settings.h"
+#include "Utils.h"
 
 void WildfireMgr::PeriodicUpdate(float delta) {
     auto* set = Settings::GetSingleton();
@@ -17,40 +18,63 @@ void WildfireMgr::PeriodicUpdate(float delta) {
         }
         for (int q = 0; q < 4; ++q) {
             for (int v = 0; v < 289; ++v) {
+                auto& colors = fireCell.first->GetRuntimeData().cellLand->loadedData->colors[q][v];
                 if (fireCell.second.isBurning[q][v]) {
                     // ToDo: Get Wind Force and direction
-                    //
-                    // Damage adjustment cells based on heat
+                    // ToDo: Neighbours veight (0.7 for diagonal, 1.0 for cardinal directions)
 
                     FireVertex targetVertex{fireCell.first, q, v};
 
-                    if (fireCell.second.heat[q][v] >= 8.0f) {
-                        auto neighbours = GetFireVertexNeighbours(targetVertex);
+                    auto neighbours = GetFireVertexNeighbours(targetVertex);
 
-                        for (const auto& neighbour : neighbours) {
-                            // Damage neighbouring cells
-                            DamageFireCell(neighbour, fireCell.second.heat[q][v] / set->HeatDistributionFactor);
-                        }
+                    for (const auto& neighbour : neighbours) {
+                        // Damage neighbouring cells
+                        DamageFireCell(neighbour, fireCell.second.heat[q][v] / set->HeatDistributionFactor);
                     }
-                    fireCell.second.heat[q][v] -= fireCell.second.heat[q][v] / set->HeatDistributionFactor;
+
+                    // Decrease heat based on neighbours
+                    fireCell.second.heat[q][v] -=
+                        neighbours.size() * (fireCell.second.heat[q][v] / set->HeatDistributionFactor) * delta;
 
                     // Decrease fuel amount
-                    fireCell.second.fuel[q][v] -= set->FuelConsumptionRate;
-                    fireCell.second.heat[q][v] += set->FuelConsumptionRate;  // Heat increases as fuel burns
+                    fireCell.second.fuel[q][v] -= set->FuelConsumptionRate * delta;
+                    // Heat increases as fuel burns
+                    fireCell.second.heat[q][v] +=
+                        set->FuelConsumptionRate * set->FuelToHeatRate * delta;
 
+                    // Mark as charred when burning stops
                     if (fireCell.second.fuel[q][v] <= 0.0f) {
                         fireCell.second.isBurning[q][v] = false;
-                        fireCell.second.isCharred[q][v] = true;  // Mark as charred when burning stops
-                        const char* smokeModel = "MPS\\MPSDragonSmoke.nif";
-                        SpawnFxAtVertex(targetVertex, 50.0f, smokeModel);
+                        fireCell.second.isCharred[q][v] = true;
+
+                        colors[0] = 0.0f;  // R
+                        colors[1] = 0.0f;  // G
+                        colors[2] = 0.0f;  // B
+                        // Mark the Cell as altered by fire
+                        fireCell.second.altered = true;
+                    } else {
+                        // Update color based on fuel left
+                        float fuelRatio = fireCell.second.fuel[q][v] / set->InitialFuelAmount;
+                        float colorValue = 127.0f - (127.0f * (1.0f - fuelRatio));
+                        if (colors[0] > colorValue || colors[1] > colorValue || colors[2] > colorValue ||
+                            colors[0] < 0 || colors[1] < 0 || colors[2] < 0) {
+                            colors[0] = colorValue;  // R
+                            colors[1] = colorValue;  // G
+                            colors[2] = colorValue;  // B
+                            // Mark the Cell as altered by fire
+                            fireCell.second.altered = true;
+                        }
                     }
+                } else if (fireCell.second.heat[q][v] > 0) {  
+                    // Cool down the fire cell if not burning
+                    fireCell.second.heat[q][v] -= set->SelfHeatLoss * delta;
                 }
             }
         }
     }
 }
 
-void WildfireMgr::AddFireEvent(const RE::NiPoint3& impactPos, float radius, float damage) { 
+void WildfireMgr::AddFireEvent(const RE::NiPoint3& impactPos, float radius, float damage) {
 	FireVertex NearestVertex = FindNearestVertex(impactPos);
     if (!NearestVertex.cell) {
         logger::error("Failed to find nearest vertex for fire event at position ({}, {}, {})", impactPos.x, impactPos.y,
@@ -82,44 +106,27 @@ void WildfireMgr::DamageFireCell(const FireVertex target, float damage) {
 
     cellState->heat[quadrant][vertexIndex] += damage;
 
+    if (!cellState->isBurning[quadrant][vertexIndex]) { // If not already burning, check if it should start burning
 
-    if (!cellState->isBurning[quadrant][vertexIndex]) {
-        // Calculate burning percentage based on heat
-        float burningPercent = 0.0f;
-        burningPercent = (cellState->heat[quadrant][vertexIndex] / set->MinHeatToBurn) * 100.0f;
-        if (burningPercent > 100.0f) {
-            burningPercent = 100.0f;
-        }
-
-        if (burningPercent >= 100.0f) {  // If not already burning, check if it should start burning
+        if (cellState->heat[quadrant][vertexIndex] / set->MinHeatToBurn >= 1.0f) {  
             cellState->isBurning[quadrant][vertexIndex] = true;
 
-            auto& colors = target.cell->GetRuntimeData().cellLand->loadedData->colors[quadrant][vertexIndex];
-
-            colors[0] = 0.0f;  // R
-            colors[1] = 0.0f;  // G
-            colors[2] = 0.0f;  // B
-
-            const char* fireModel = "Effects\\FXFire01New.nif";
-            SpawnFxAtVertex(target, 60.0f, fireModel);
-
-            cellState->altered = true;  // Mark the Cell as altered by fire
         } else {
-            float colorValue = 255.0f * (1.0f - std::clamp(burningPercent, 0.0f, 100.0f) / 100.0f);
-
             auto& colors = target.cell->GetRuntimeData().cellLand->loadedData->colors[quadrant][vertexIndex];
-
-            if (colors[0] > colorValue || colors[1] > colorValue || colors[2] > colorValue) {
+            float heatRatio = cellState->heat[quadrant][vertexIndex] / set->MinHeatToBurn;
+            float colorValue = 127.0f + (127.0f * (1.0f - heatRatio));
+            if (colors[0] > colorValue || colors[1] > colorValue || colors[2] > colorValue || 
+                colors[0] < 0 || colors[1] < 0 || colors[2] < 0) {
                 colors[0] = colorValue;  // R
                 colors[1] = colorValue;  // G
                 colors[2] = colorValue;  // B
-
-                cellState->altered = true;  // Mark the Cell as altered by fire
+                // Mark the cell as altered by fire
+                cellState->altered = true;
             }
         }
     }
-}
 
+}
 
 void WildfireMgr::CoolFireCell(FireVertex target, float damage) {
     FireCellState* cellState = GetOrCreateFireCellState(target.cell);
@@ -131,6 +138,9 @@ void WildfireMgr::CoolFireCell(FireVertex target, float damage) {
         return;
     }  // If no fuel, can't burn, or already charred, do nothing
 
+    if (cellState->heat[quadrant][vertexIndex] <= 0) {
+        return;  // If no heat, nothing to cool down
+    }
     cellState->heat[quadrant][vertexIndex] -= damage;
 }
 
@@ -175,10 +185,13 @@ FireVertex WildfireMgr::FindNearestVertex(const RE::NiPoint3& pos) {
     return key;
 }
 
-
 FireCellState* WildfireMgr::GetOrCreateFireCellState(RE::TESObjectCELL* cell) {
-    auto [it, inserted] = fireCellMap.try_emplace(cell, FireCellState());
-    return &(it->second);
+    auto it = fireCellMap.find(cell);
+    if (it != fireCellMap.end()) {
+        return &(it->second);
+    }
+    auto [newIt, _] = fireCellMap.emplace(cell, FireCellState(cell));
+    return &(newIt->second);
 }
 
 std::pair<int, int> WildfireMgr::GetCellCoords(RE::TESObjectCELL* cell) {
@@ -264,84 +277,4 @@ std::vector<FireVertex> WildfireMgr::GetFireVertexNeighbours(const FireVertex& v
         }
     }
     return result;
-}
-
-RE::NiPoint3 WildfireMgr::GetWorldPosition(const FireVertex& vertex) {
-    if (!vertex.cell) return RE::NiPoint3{0.0f, 0.0f, 0.0f};
-
-    // Get cell grid coordinates
-    auto coords = vertex.cell->GetCoordinates();
-    int cellX = coords->cellX;
-    int cellY = coords->cellY;
-
-    // Cell world origin
-    float cellWorldX = cellX * 4096.0f;
-    float cellWorldY = cellY * 4096.0f;
-
-    // Quadrant (qx, qy)
-    int qx = vertex.quadrant % 2;
-    int qy = vertex.quadrant / 2;
-
-    // Quadrant world offset
-    float quadWorldX = cellWorldX + qx * 2048.0f;
-    float quadWorldY = cellWorldY + qy * 2048.0f;
-
-    // Vertex (vx, vy) in quadrant
-    int vx = vertex.vertex % 17;
-    int vy = vertex.vertex / 17;
-
-    // Vertex world offset
-    float vertWorldX = quadWorldX + vx * 128.0f;
-    float vertWorldY = quadWorldY + vy * 128.0f;
-
-    float vertWorldZ = 0.0f;
-    RE::TES::GetSingleton()->GetLandHeight(RE::NiPoint3{vertWorldX, vertWorldY, 0.0f}, vertWorldZ);
-
-    return RE::NiPoint3{vertWorldX, vertWorldY, vertWorldZ};
-}
-
-#include <random>
-
-inline float RandomFloat(float min, float max) {
-    static thread_local std::mt19937 rng{std::random_device{}()};
-    std::uniform_real_distribution<float> dist(min, max);
-    return dist(rng);
-}
-
-void WildfireMgr::SpawnFxAtVertex(const FireVertex& vertex, float lifetime, const char* fxModel) {
-    if (!vertex.cell) return;
-
-    RE::NiPoint3 pos = GetWorldPosition(vertex);
-    pos.x += RandomFloat(-10.0f, 10.0f);  // Add some random offset to the position
-    pos.y += RandomFloat(-10.0f, 10.0f);
-
-    RE::NiPoint3 rotation{RandomFloat(0.0f, 360.0f), RandomFloat(0.0f, 360.0f), RandomFloat(0.0f, 360.0f)};
-    std::uint32_t flags = 0;
-    float scale = RandomFloat(0.8f, 1.2f);
-    RE::NiAVObject* target = nullptr;
-
-    // Spawn the particle effect Find out why only one max particle is spawned
-    auto particle = RE::BSTempEffectParticle::Spawn(vertex.cell, lifetime, fxModel, rotation, pos, scale, flags, target);
-    if (!particle) {
-        logger::error("Failed to spawn particle effect at vertex ({}, {}, {}) in cell {:X}", pos.x, pos.y, pos.z,
-                      vertex.cell->GetFormID());
-        return;
-    }
-}
-
-void WildfireMgr::SpawnHazardAtVertex(const FireVertex& vertex, RE::BGSHazard* hazardForm) {
-    if (!vertex.cell || !hazardForm) return;
-
-    RE::NiPoint3 pos = GetWorldPosition(vertex);
-
-    // Umieœæ hazard w œwiecie
-    auto player = RE::PlayerCharacter::GetSingleton();
-    auto hazardRef = player->PlaceObjectAtMe(hazardForm, false);
-    if (!hazardRef) return;
-
-    hazardRef->SetPosition(pos);
-
-    // Zapisz wskaŸnik do FireCellState
-    FireCellState* cellState = GetOrCreateFireCellState(vertex.cell);
-    cellState->hazards[vertex.quadrant][vertex.vertex] = hazardRef;
 }

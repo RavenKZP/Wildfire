@@ -1,5 +1,7 @@
 #pragma once
 
+#include "WildfireMgr.h"
+
 namespace Utils {
 
     void InitializeHazards();
@@ -12,5 +14,6 @@ namespace Utils {
 
     float GetDamageFromProjectile(RE::Projectile* proj);
 
-    inline RE::BGSHazard* fireHazard = nullptr;
+    RE::NiPoint3 GetWorldPosition(const FireVertex& vertex);
+
 }
