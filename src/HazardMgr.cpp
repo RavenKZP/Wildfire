@@ -1,35 +1,9 @@
-#include "HazardManager.h"
-#include "Utils.h"
+#include "HazardMgr.h"
 #include "WildfireMgr.h"
 #include "Settings.h"
+#include "Utils.h"
 
 #include <random>
-
-void HazardMgr::PeriodicUpdate(float delta) {
-    auto* set = Settings::GetSingleton();
-    auto FlameCells = WildfireMgr::GetSingleton()->GetFireCellMap();
-    float HazardLifetime = set->PeriodicUpdateTime;
-
-    // The idea is to minimalize Fire Hazards for performance reasons
-    for (auto& cell : FlameCells) {
-        auto& fireCell = cell.second;
-        for (int q = 0; q < 4; ++q) {
-            for (int v = 0; v < 289; ++v) {
-                if (fireCell.isBurning[q][v]) {
-                    if (fireCell.heat[q][v] >= set->HeatToBigFire) {
-                        // Spawn large fire hazard
-                        SpawnHazardAtVertex(FireVertex{cell.first, q, v}, FireDragonHazard,
-                                            fireCell.heat[q][v], HazardLifetime);
-                    } else {
-                        // Spawn small fire hazard
-                        SpawnHazardAtVertex(FireVertex{cell.first, q, v}, FireDragonHazard,
-                                            fireCell.heat[q][v], HazardLifetime);
-                    }
-                }
-            }
-        }
-    }
-}
 
 void HazardMgr::InitializeHazards() {
     FireLgShortHazard = RE::TESForm::LookupByEditorID("FireLgShortHazard")->As<RE::BGSHazard>();
@@ -67,7 +41,7 @@ void HazardMgr::SpawnFxAtVertex(const FireVertex& vertex, float lifetime, const 
     particle->Detach();
 }
 
-void HazardMgr::SpawnHazardAtVertex(const FireVertex& vertex, RE::BGSHazard* hazardForm, float baseScale,
+void HazardMgr::SpawnHazardAtVertex(const FireVertex& vertex, RE::BGSHazard* hazardForm,
                                     float lifetime) {
     if (!vertex.cell || !hazardForm) return;
 
@@ -77,7 +51,6 @@ void HazardMgr::SpawnHazardAtVertex(const FireVertex& vertex, RE::BGSHazard* haz
 
     auto origlifetime = hazardForm->data.lifetime;
     hazardForm->data.lifetime = lifetime;
-    hazardForm->data.limit = 0;
 
     auto player = RE::PlayerCharacter::GetSingleton();
     auto hazardRef = player->PlaceObjectAtMe(hazardForm, false);
@@ -90,7 +63,8 @@ void HazardMgr::SpawnHazardAtVertex(const FireVertex& vertex, RE::BGSHazard* haz
     hazardRef->SetPosition(pos);
     hazardRef->data.angle = RE::NiPoint3{RandomFloat(0.0f, 360.0f), 0.0f, 0.0f};
 
-    float scale = RandomFloat(0.9f, 1.1f);
+    float scale = RandomFloat(0.8f, 1.2f);
+    hazardForm->data.radius = scale;
     hazardRef->GetReferenceRuntimeData().refScale = static_cast<std::uint16_t>(scale * 100.0f);
 
     hazardForm->data.lifetime = origlifetime;  // Restore original lifetime

@@ -1,19 +1,22 @@
 #include "logger.h"
+#include "Events.h"
 #include "Hooks.h"
 #include "MCP.h"
 #include "Utils.h"
 #include "Settings.h"
-#include "HazardManager.h"
+#include "HazardMgr.h"
+#include "WildfireMgr.h"
 
 void OnMessage(SKSE::MessagingInterface::Message* message) {
     if (message->type == SKSE::MessagingInterface::kDataLoaded) {
-        Hooks::InstallAddImpactHooks();
-        Hooks::UpdateHook::Install();
+        Hooks::InstallHooks();
         HazardMgr::GetSingleton()->InitializeHazards();
+        Settings::GetSingleton()->LoadSettings();
         MCP::Register();
+
     }
-    if (message->type == SKSE::MessagingInterface::kNewGame || message->type == SKSE::MessagingInterface::kPostLoadGame) {
-        // Post-load
+    if (message->type == SKSE::MessagingInterface::kPreLoadGame) {
+        WildfireMgr::GetSingleton()->ResetAllFireCells();
     }
 }
 

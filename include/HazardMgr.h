@@ -1,11 +1,10 @@
 #pragma once
-#include "WildfireMgr.h"
+#include "Types.h"
 
 #include "ClibUtil/singleton.hpp"
 
 class HazardMgr : public clib_util::singleton::ISingleton<HazardMgr> {
 public:
-    void PeriodicUpdate(float delta);
     void InitializeHazards();
     
     RE::BGSHazard* FireLgShortHazard;
@@ -15,8 +14,10 @@ public:
 
     RE::BGSHazard* FireDragonHazard;
 
-private:
+    
     void SpawnFxAtVertex(const FireVertex& vertex, float lifetime, const char* fxModel);
-    void SpawnHazardAtVertex(const FireVertex& vertex, RE::BGSHazard* hazardForm, float baseScale, float lifetime);
+    void SpawnHazardAtVertex(const FireVertex& vertex, RE::BGSHazard* hazardForm, float lifetime);
+
+private:
 
 };

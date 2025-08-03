@@ -13,7 +13,8 @@
         "skyprompt-api",
         "directxtk",
         "skse-mcp",
-        "glm"
+        "glm",
+        "nlohmann-json"
     ],
     "overrides": [
         {

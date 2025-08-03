@@ -3,7 +3,7 @@
 #include "Utils.h"
 #include "Settings.h"
 #include "WildfireMgr.h"
-#include "HazardManager.h"
+#include "HazardMgr.h"
 
 #include <chrono>
 #include <cmath>
@@ -22,19 +22,19 @@ namespace Hooks {
         logger::info("Processing impact at position: ({}, {}, {})", pos.x, pos.y, pos.z);
 
         auto start = std::chrono::high_resolution_clock::now();
-        // Check for Fire damage, use keywords, Projectile type, name, etc.
 
-        float radius = 0.0f;
-        RE::BGSExplosion* explosion = a_proj->GetProjectileRuntimeData().explosion;
-        if (explosion) {
-            radius = explosion->data.radius;
+        if (Utils::IsFireProjectile(a_proj)) {
+            float radius = 0.0f;
+            RE::BGSExplosion* explosion = a_proj->GetProjectileRuntimeData().explosion;
+            if (explosion) {
+                radius = explosion->data.radius;
+            }
+            float damage = Utils::GetDamageFromProjectile(a_proj) * set->DamageMultiplayer;
+
+            logger::info("Fire Damage {} radius: {}", damage, radius);
+
+            WildfireMgr::GetSingleton()->AddFireEvent(pos, radius, damage);
         }
-
-        logger::info("Explosion strenght radius: {}", radius);
-
-        float damage = Utils::GetDamageFromProjectile(a_proj) * set->DamageMultiplayer;
-        WildfireMgr::GetSingleton()->AddFireEvent(pos, radius, damage);
-
 
         auto end = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double, std::milli> duration = end - start;
@@ -54,17 +54,18 @@ namespace Hooks {
         if (!set->ModActive) {
             return;  // If the mod is inactive, skip the update
         }
+
         static float timeAccumulator = 0.0f;
         timeAccumulator += a_delta;
         if (timeAccumulator > set->PeriodicUpdateTime) {
             auto start = std::chrono::high_resolution_clock::now();
             WildfireMgr::GetSingleton()->PeriodicUpdate(timeAccumulator);
-            HazardMgr::GetSingleton()->PeriodicUpdate(timeAccumulator);
             auto end = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double, std::milli> duration = end - start;
             logger::info("Periodic Update in {} ms", duration.count());
             timeAccumulator = 0.0f;
         }
+
         if (set->DebugMode) {
             DebugAPI_IMPL::DebugAPI::Update();
         }
@@ -76,6 +77,7 @@ namespace Hooks {
         Update_ = PlayerCharacterVtbl.write_vfunc(0xAD, Update);
 
     }
+
 
     void Hooks::MissileImpact::thunk(RE::Projectile* a_proj, RE::TESObjectREFR* a_ref, const RE::NiPoint3& a_targetLoc,
                                      const RE::NiPoint3& a_velocity, RE::hkpCollidable* a_collidable,

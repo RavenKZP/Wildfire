@@ -3,7 +3,6 @@ namespace Hooks {
     void Process(RE::Projectile* a_proj, const RE::NiPoint3& a_targetLoc);
 
     struct UpdateHook {
-        static inline RE::TESObjectREFR* object = nullptr;
         static void Update(RE::Actor* a_this, float a_delta);
         static inline REL::Relocation<decltype(Update)> Update_;
         static void Install();
@@ -50,7 +49,15 @@ namespace Hooks {
         static inline REL::Relocation<decltype(thunk)> originalFunction;
     };
 
-    inline void InstallAddImpactHooks() {
+    inline void InstallHooks() {
+        /*
+        constexpr size_t size_per_hook = 14;
+        auto& trampoline = SKSE::GetTrampoline();
+        SKSE::AllocTrampoline(size_per_hook * 1);
+        */
+
+        UpdateHook::Install();
+
         MissileImpact::originalFunction =
             REL::Relocation<std::uintptr_t>(RE::MissileProjectile::VTABLE[0]).write_vfunc(0xBD, MissileImpact::thunk);
         BeamImpact::originalFunction =
