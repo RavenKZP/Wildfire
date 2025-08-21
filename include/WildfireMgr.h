@@ -4,6 +4,9 @@
 
 #include "ClibUtil/singleton.hpp"
 
+#include <future>
+#include <shared_mutex>
+
 
 inline bool ContainsKeywordInsensitive(const RE::BSFixedString& modelPath, const std::string_view keyword) {
     std::string_view pathView = modelPath;
@@ -19,6 +22,7 @@ inline bool ContainsKeywordInsensitive(const RE::BSFixedString& modelPath, const
 class WildfireMgr : public clib_util::singleton::ISingleton<WildfireMgr> {
 public:
     void PeriodicUpdate(float delta);
+    void GenerateGrassInQueueCells();
 
     void AddFireEvent(const RE::NiPoint3& impactPos, float radius, float damage);
     bool IsCellAltered(RE::TESObjectCELL* cell);
@@ -29,7 +33,7 @@ public:
 
     
     // Wind-related methods
-    std::pair<uint8_t, uint8_t> GetCurrentWind();
+    WindData GetCurrentWind();
     bool IsCurrentWeatherRaining();
 
     void ResetFireCellState(RE::TESObjectCELL* cell);
@@ -52,6 +56,13 @@ private:
     std::pair<int, int> GetCellCoords(RE::TESObjectCELL* cell);
     RE::TESObjectCELL* GetCellByCoords(int cellX, int cellY);
 
-
+    
+    std::shared_mutex fireCellMapMutex;
     std::unordered_map<RE::TESObjectCELL*, FireCellState> fireCellMap;
+
+    std::shared_mutex cellTasksMutex;
+    std::unordered_map<RE::TESObjectCELL*, std::future<void>> cellTasks;
+
+    std::shared_mutex grassGenerationMutex;
+    std::queue<RE::TESObjectCELL*> grassGenerationQueue;
 };

@@ -12,7 +12,8 @@ namespace Utils {
 
     std::tuple<bool, uint8_t, uint8_t> GetGrassData(RE::TESObjectLAND::LoadedLandData* loadedData, int q, int v);
 
-    bool IsFireProjectile(RE::Projectile* proj);
+    ProjectileType GetProjectileType(RE::Projectile* proj);
+    ProjectileType GetExplosionType(RE::Explosion* exp);
 
 
 

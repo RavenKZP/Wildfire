@@ -12,6 +12,10 @@ namespace Utils {
             return 0.0f;
         }
 
+        auto* set = Settings::GetSingleton();
+
+        float ret = set->DefaultDamage;
+
         const auto& data = proj->GetProjectileRuntimeData();
 
         RE::Actor* actor = nullptr;
@@ -19,23 +23,33 @@ namespace Utils {
             actor = data.shooter.get().get()->As<RE::Actor>();
         }
 
-        if (data.spell) {
-            if (actor) {
-                return data.spell->CalculateMagickaCost(actor);
-            } else {
-                return data.spell->CalculateMagickaCost(nullptr);
+        if (data.weaponSource) {
+            if (data.weaponSource->attackDamage > 0) {
+                ret = static_cast<float>(data.weaponSource->attackDamage);
             }
         }
 
         if (data.ammoSource) {
-            return static_cast<float>(data.ammoSource->data.damage);
+            if (data.ammoSource->data.damage > 0) {
+                ret = static_cast<float>(data.ammoSource->data.damage);
+            }
         }
 
-        if (data.weaponSource) {
-            return static_cast<float>(data.weaponSource->attackDamage);
+        if (data.spell) {
+            float damage = 0.0f;
+            if (actor) {
+                damage = data.spell->CalculateMagickaCost(actor);
+            } else {
+                damage = data.spell->CalculateMagickaCost(nullptr);
+            }
+            if (damage > 0.0f) {
+                ret = damage;
+            }
         }
-
-        return 0.0f;
+        if (data.explosion && ret < set->DefaultExplosionDamage) {
+            ret = set->DefaultExplosionDamage;
+        }
+        return ret;
     }
 
     RE::NiPoint3 GetWorldPosition(const FireVertex& vertex) {
@@ -75,8 +89,8 @@ namespace Utils {
     std::tuple<bool, uint8_t, uint8_t> GetGrassData(RE::TESObjectLAND::LoadedLandData* loadedData, int q, int v) {
         auto set = Settings::GetSingleton();
         bool canBurn = false;
-        uint8_t fuel = set->InitialFuelAmount;
-        uint8_t minBurnHeat = set->MinHeatToBurn;
+        uint8_t fuel = set->DefaultInitialFuelAmount;
+        uint8_t minBurnHeat = set->DefaultMinHeatToBurn;
         bool defaultConfig = true;
 
         float defaultTexturePercent = 1.0f;
@@ -151,63 +165,177 @@ namespace Utils {
                        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
         return s;
     }
+    
+    static bool MatchesAnyPattern(const std::string& lower, const std::vector<std::string>& patterns) {
+        for (const auto& pat : patterns) {
+            if (lower.find(pat) != std::string::npos) {
+                return true;
+            }
+        }
+        return false;
+    }
 
-    bool IsFireProjectile(RE::Projectile* proj) {
-        if (!proj) return false;
+    ProjectileType GetProjectileType(RE::Projectile* proj) {
+        if (!proj) {
+            return ProjectileType::Unknown;
+        }
 
         auto set = Settings::GetSingleton();
 
-        auto checkString = [&](const char* str) -> bool {
-            if (!str) return false;
-            std::string lower = ToLower(str);
-            for (const auto& pat : set->fireSources) {
-                if (lower.find(pat) != std::string::npos) {
-                    return true;
-                }
-            }
-            return false;
-        };
-
         // 1. Source spell/magic item
         if (auto spellSource = proj->GetProjectileRuntimeData().spell) {
-            if (spellSource->GetFormEditorID() && checkString(spellSource->GetFormEditorID())) {
-                logger::info("Found fire spell source: {}", spellSource->GetFormEditorID());
-                return true;
+            if (auto editorID = spellSource->GetFormEditorID()) {
+                std::string lowerID = ToLower(editorID);
+                if (MatchesAnyPattern(lowerID, set->fireSources)) {
+                    return ProjectileType::Fire;
+                }
+                if (MatchesAnyPattern(lowerID, set->coldSources)) {
+                    return ProjectileType::Cold;
+                }
+                if (MatchesAnyPattern(lowerID, set->waterSources)) {
+                    return ProjectileType::Water;
+                }
             }
-            if (spellSource->GetFullName() && checkString(spellSource->GetFullName())) {
-                logger::info("Found fire spell source by name: {}", spellSource->GetFullName());
-                return true;
+            if (auto fulName = spellSource->GetFullName()) {
+                std::string lowerID = ToLower(fulName);
+                if (MatchesAnyPattern(lowerID, set->fireSources)) {
+                    return ProjectileType::Fire;
+                }
+                if (MatchesAnyPattern(lowerID, set->coldSources)) {
+                    return ProjectileType::Cold;
+                }
+                if (MatchesAnyPattern(lowerID, set->waterSources)) {
+                    return ProjectileType::Water;
+                }
             }
-            logger::info("No fire spell match found for: {}",
-                         spellSource->GetFormEditorID() ? spellSource->GetFormEditorID() : "Unknown");
 
+            // Check base effects of the spell
             for (auto MagEf : spellSource->effects) {
-                if (MagEf && MagEf->baseEffect && MagEf->baseEffect->GetFormEditorID() &&
-                    checkString(MagEf->baseEffect->GetFormEditorID())) {
-                    logger::info("Found fire effect: {}", MagEf->baseEffect->GetFormEditorID());
-                    return true;
-                }
-                if (MagEf && MagEf->baseEffect && MagEf->baseEffect->GetFullName() &&
-                    checkString(MagEf->baseEffect->GetFullName())) {
-                    logger::info("Found fire effect by name: {}", MagEf->baseEffect->GetFullName());
-                    return true;
+                if (MagEf && MagEf->baseEffect) {
+                    if (auto editorID = MagEf->baseEffect->GetFormEditorID()) {
+                        std::string lowerID = ToLower(editorID);
+                        if (MatchesAnyPattern(lowerID, set->fireSources)) {
+
+                            return ProjectileType::Fire;
+                        }
+                        if (MatchesAnyPattern(lowerID, set->coldSources)) {
+                            return ProjectileType::Cold;
+                        }
+                        if (MatchesAnyPattern(lowerID, set->waterSources)) {
+                            return ProjectileType::Water;
+                        }
+                    }
+                    if (auto fullName = MagEf->baseEffect->GetFullName()) {
+                        std::string lowerID = ToLower(fullName);
+                        if (MatchesAnyPattern(lowerID, set->fireSources)) {
+                            return ProjectileType::Fire;
+                        }
+                        if (MatchesAnyPattern(lowerID, set->coldSources)) {
+                            return ProjectileType::Cold;
+                        }
+                        if (MatchesAnyPattern(lowerID, set->waterSources)) {
+                            return ProjectileType::Water;
+                        }
+                    }
                 }
             }
-            logger::info("No fire effect match found for spell: {}",
-                         spellSource->GetFormEditorID() ? spellSource->GetFormEditorID() : "Unknown");
         }
 
-
-
-        // 2. Projectile's own ID/name
-        if (proj->GetFormEditorID() && checkString(proj->GetFormEditorID())) {
-            logger::info("Found fire projectile: {}", proj->GetFormEditorID());
-            return true;
+        // 2. Ammo source
+        if (auto ammoSource = proj->GetProjectileRuntimeData().ammoSource) {
+            if (auto editorID = ammoSource->GetFormEditorID()) {
+                std::string lowerID = ToLower(editorID);
+                if (MatchesAnyPattern(lowerID, set->fireSources)) {
+                    return ProjectileType::Fire;
+                }
+                if (MatchesAnyPattern(lowerID, set->coldSources)) {
+                    return ProjectileType::Cold;
+                }
+                if (MatchesAnyPattern(lowerID, set->waterSources)) {
+                    return ProjectileType::Water;
+                }
+            }
+            if (auto fullName = ammoSource->GetFullName()) {
+                std::string lowerID = ToLower(fullName);
+                if (MatchesAnyPattern(lowerID, set->fireSources)) {
+                    return ProjectileType::Fire;
+                }
+                if (MatchesAnyPattern(lowerID, set->coldSources)) {
+                    return ProjectileType::Cold;
+                }
+                if (MatchesAnyPattern(lowerID, set->waterSources)) {
+                    return ProjectileType::Water;
+                }
+            }
         }
 
-        logger::info("No fire projectile match found for: {}",
-                     proj->GetFormEditorID() ? proj->GetFormEditorID() : "Unknown");
-        return false;
+        // 3. Weapon source
+        if (auto weapSource = proj->GetProjectileRuntimeData().weaponSource) {
+            if (auto editorID = weapSource->GetFormEditorID()) {
+                std::string lowerID = ToLower(editorID);
+                if (MatchesAnyPattern(lowerID, set->fireSources)) {
+                    return ProjectileType::Fire;
+                }
+                if (MatchesAnyPattern(lowerID, set->coldSources)) {
+                    return ProjectileType::Cold;
+                }
+                if (MatchesAnyPattern(lowerID, set->waterSources)) {
+                    return ProjectileType::Water;
+                }
+            }
+            if (auto fullName = weapSource->GetFullName()) {
+                std::string lowerID = ToLower(fullName);
+                if (MatchesAnyPattern(lowerID, set->fireSources)) {
+                    return ProjectileType::Fire;
+                }
+                if (MatchesAnyPattern(lowerID, set->coldSources)) {
+                    return ProjectileType::Cold;
+                }
+                if (MatchesAnyPattern(lowerID, set->waterSources)) {
+                    return ProjectileType::Water;
+                }
+            }
+        }
+
+        // 4. Projectile's own ID/name
+        if (auto editorID = proj->GetFormEditorID()) {
+            std::string lowerID = ToLower(editorID);
+            if (MatchesAnyPattern(lowerID, set->fireSources)) {
+                return ProjectileType::Fire;
+            }
+            if (MatchesAnyPattern(lowerID, set->coldSources)) {
+                return ProjectileType::Cold;
+            }
+            if (MatchesAnyPattern(lowerID, set->waterSources)) {
+                return ProjectileType::Water;
+            }
+        }
+        return ProjectileType::Unknown;
+    }
+
+    ProjectileType GetExplosionType(RE::Explosion* exp) {
+        if (!exp) {
+            return ProjectileType::Unknown;
+        }
+
+        auto set = Settings::GetSingleton();
+
+        if (auto base = exp->GetBaseObject()) {
+            if (auto model = base->As<RE::TESModel>()) {
+                std::string lowerID = ToLower(model->model.c_str());
+                if (MatchesAnyPattern(lowerID, set->fireSources)) {
+                    return ProjectileType::Fire;
+                }
+                if (MatchesAnyPattern(lowerID, set->coldSources)) {
+                    return ProjectileType::Cold;
+                }
+                if (MatchesAnyPattern(lowerID, set->waterSources)) {
+                    return ProjectileType::Water;
+                }
+                logger::debug("Explosion model {}", model->model.c_str());
+            }
+        }
+        return ProjectileType::Unknown;
     }
 
 }  // namespace Utils

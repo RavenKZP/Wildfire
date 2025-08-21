@@ -8,7 +8,7 @@ namespace MCP {
     void __stdcall RenderSettings();
     void __stdcall RenderWildfireMgr();
     void __stdcall RenderGrassConfig();
-    void __stdcall RenderFireConfig();
+    void __stdcall RenderDetectionConfig();
     void __stdcall RenderGrassMgr();
     void __stdcall RenderLog();
 

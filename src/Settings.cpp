@@ -34,13 +34,13 @@ std::vector<GrassFireConfig> LoadAllGrassConfigs(const std::filesystem::path& di
 }
 
 // Load substring patterns (one per line, '#' prefix = comment)
-void LoadFirePatternsFromFile(const std::filesystem::path& path, std::vector<std::string>& outPatterns) {
+void LoadPatternsFromFile(const std::filesystem::path& path, std::vector<std::string>& outPatterns) {
     std::ifstream in(path);
     if (!in.is_open()) {
-        logger::warn("Failed to open fire pattern config '{}'", path.string());
+        logger::warn("Failed to open pattern config '{}'", path.string());
         return;
     }
-    logger::info("Loading fire patterns from '{}'", path.string());
+    logger::info("Loading patterns from '{}'", path.string());
     std::string line;
     while (std::getline(in, line)) {
         // trim whitespace
@@ -54,18 +54,22 @@ void LoadFirePatternsFromFile(const std::filesystem::path& path, std::vector<std
 }
 
 // Load all pattern files in folder
-void LoadAllFirePatterns(const std::filesystem::path& folder, std::vector<std::string>& outPatterns) {
+void LoadAllPatterns(const std::filesystem::path& folder, std::vector<std::string>& outPatterns) {
     if (!std::filesystem::exists(folder)) return;
     for (auto& entry : std::filesystem::directory_iterator(folder)) {
         if (!entry.is_regular_file()) continue;
-        LoadFirePatternsFromFile(entry.path(), outPatterns);
+        LoadPatternsFromFile(entry.path(), outPatterns);
     }
 }
 
 void Settings::LoadSettings() {
     grassConfigs = LoadAllGrassConfigs("Data\\SKSE\\Plugins\\Wildfire\\Grass");
-    LoadAllFirePatterns("Data\\SKSE\\Plugins\\Wildfire\\FireSources", fireSources);
+    LoadAllPatterns("Data\\SKSE\\Plugins\\Wildfire\\FireSources", fireSources);
+    LoadAllPatterns("Data\\SKSE\\Plugins\\Wildfire\\ColdSources", coldSources);
+    LoadAllPatterns("Data\\SKSE\\Plugins\\Wildfire\\WaterSources", waterSources);
 
     logger::info("Loaded {} grass configs", grassConfigs.size());
     logger::info("Loaded {} fire source patterns", fireSources.size());
+    logger::info("Loaded {} cold source patterns", coldSources.size());
+    logger::info("Loaded {} water source patterns", waterSources.size());
 }

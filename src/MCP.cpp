@@ -15,7 +15,7 @@ namespace MCP {
         SKSEMenuFramework::SetSection("Wildfire");
         SKSEMenuFramework::AddSectionItem("Settings", RenderSettings);
         SKSEMenuFramework::AddSectionItem("Loaded Grass Config", RenderGrassConfig);
-        SKSEMenuFramework::AddSectionItem("Loaded Fire Config", RenderFireConfig);
+        SKSEMenuFramework::AddSectionItem("Loaded Fire Config", RenderDetectionConfig);
 
 #ifndef NDEBUG
         SKSEMenuFramework::AddSectionItem("WildfireMgr", RenderWildfireMgr);
@@ -36,13 +36,50 @@ namespace MCP {
         ImGui::Checkbox("Mod Active", &set->ModActive);
         ImGui::SameLine();
         ImGui::Checkbox("Debug Mode", &set->DebugMode);
-        ImGui::SliderFloat("Periodic Update Time (s)", &set->PeriodicUpdateTime, 0.1f, 10.0f, "%.1f");
+
+        ImGui::SliderInt("Grass Generation Cells Per Frame Limit", &set->GrassGenerationCellsPerFrameLimit, 1, 10);
+
+        ImGui::SliderFloat("Grass Periodic Update Time (s)", &set->GrassPeriodicUpdateTime, 0.1f, 10.0f, "%.1f");
+        ImGui::SliderFloat("Hazard Periodic Update Time (s)", &set->HazardPeriodicUpdateTime, 0.1f, 10.0f, "%.1f");
         ImGui::SliderFloat("Heat Distribution", &set->HeatDistributionFactor, 1.0f, 100.0f, "%.1f");
         ImGui::SliderFloat("Fuel Consumption Rate", &set->FuelConsumptionRate, 0.1f, 10.0f, "%.2f");
         ImGui::SliderFloat("Fuel To Heat Rate", &set->FuelToHeatRate, 0.01f, 1.0f, "%.2f");
         ImGui::SliderFloat("Self Heat Loss", &set->SelfHeatLoss, 0.01f, 1.0f, "%.2f");
-        ImGui::SliderFloat("Damage Multiplayer", &set->DamageMultiplayer, 0.1f, 10.0f, "%.1f");
+        ImGui::SliderFloat("Fire Damage Multiplayer", &set->FireDamageMultiplayer, 0.1f, 10.0f, "%.1f");
+        ImGui::SliderFloat("Cold Damage Multiplayer", &set->ColdDamageMultiplayer, 0.1f, 10.0f, "%.1f");
+        ImGui::SliderFloat("Water Damage Multiplayer", &set->WaterDamageMultiplayer, 0.1f, 10.0f, "%.1f");
         ImGui::SliderFloat("Raining Factor", &set->RainingFactor, 0.1f, 1.0f, "%.2f");
+        ImGui::SliderFloat("Wind Speed Factor", &set->WindSpeedFactor, 0.1f, 10.0f, "%.1f");
+    }
+
+    static const char* GetCompassLabel(float degrees) {
+        // 8-point compass: each slice is 45°, centered on N=0
+        // We'll offset so that N is [337.5, 22.5), NE is [22.5, 67.5), etc.
+        static const char* labels[8] = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
+        int idx = static_cast<int>(std::floor((degrees + 22.5f) / 45.0f)) & 7;
+        return labels[idx];
+    }
+
+    void RenderWindDebug() {
+        static auto WildfireMgr = WildfireMgr::GetSingleton();
+
+        auto wind = WildfireMgr->GetCurrentWind();
+
+        float normSpeed = static_cast<float>(wind.speed) * 1.0f / 255.0f;
+        if (normSpeed < 0.0f) normSpeed = 0.0f;
+        if (normSpeed > 1.0f) normSpeed = 1.0f;
+
+        constexpr float RAD2DEG = 180.0f / 3.14159265358979323846f;
+        float degrees = wind.direction * RAD2DEG;
+
+        degrees = std::fmod(degrees, 360.0f);
+        if (degrees < 0.0f) degrees += 360.0f;
+
+        const char* compass = GetCompassLabel(degrees);
+
+        ImGui::Text("Wind Data:");
+        ImGui::BulletText("Speed: %u (normalized %.2f)", wind.speed, normSpeed);
+        ImGui::BulletText("Direction: %.1f° (%s)", degrees, compass);
     }
 
     void __stdcall RenderWildfireMgr() {
@@ -74,8 +111,7 @@ namespace MCP {
             const auto& currentMap = WildfireMgr->GetFireCellMap();
             fireCellCache = currentMap;
         }
-        ImGui::Text("Wind Data - Force: %d, Direction: %d", WildfireMgr->GetCurrentWind().first,
-                    WildfireMgr->GetCurrentWind().second);
+        RenderWindDebug();
         ImGui::Text("Raining: %s", WildfireMgr->IsCurrentWeatherRaining() ? "Yes" : "No");
 
         ImGui::Text("Total Cells: %d", (int)fireCellCache.size());
@@ -364,17 +400,40 @@ namespace MCP {
 
     }
 
-    
-    void __stdcall RenderFireConfig() {
-        static auto fireSources = Settings::GetSingleton()->fireSources;
-        if (fireSources.empty()) {
-            ImGui::TextUnformatted("No fire configs loaded.");
-            return;
+    void __stdcall RenderDetectionConfig() {
+        auto& settings = *Settings::GetSingleton();
+
+        if (ImGui::CollapsingHeader("Fire Sources", ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (settings.fireSources.empty()) {
+                ImGui::TextUnformatted("No fire configs loaded.");
+            } else {
+                for (const auto& config : settings.fireSources) {
+                    ImGui::BulletText("%s", config.c_str());
+                }
+            }
         }
-        for (const auto& config : fireSources) {
-            ImGui::Text("%s", config.c_str());
+
+        if (ImGui::CollapsingHeader("Cold Sources")) {
+            if (settings.coldSources.empty()) {
+                ImGui::TextUnformatted("No cold configs loaded.");
+            } else {
+                for (const auto& config : settings.coldSources) {
+                    ImGui::BulletText("%s", config.c_str());
+                }
+            }
+        }
+
+        if (ImGui::CollapsingHeader("Water Sources")) {
+            if (settings.waterSources.empty()) {
+                ImGui::TextUnformatted("No water configs loaded.");
+            } else {
+                for (const auto& config : settings.waterSources) {
+                    ImGui::BulletText("%s", config.c_str());
+                }
+            }
         }
     }
+
 
     void __stdcall MCP::RenderLog() {
         ImGui::Checkbox("Trace", &MCPLog::log_trace);

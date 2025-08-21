@@ -5,80 +5,110 @@
 
 void WildfireMgr::PeriodicUpdate(float delta) {
     auto* set = Settings::GetSingleton();
+
+    std::unique_lock tasks_lock(cellTasksMutex);
+    std::unique_lock fires_lock(fireCellMapMutex);
+    std::unique_lock grass_lock(grassGenerationMutex);
+
+    // Clean Up Completed Tasks
+    for (auto it = cellTasks.begin(); it != cellTasks.end();) {
+        auto status = it->second.wait_for(std::chrono::seconds(0));
+        if (status == std::future_status::ready) {
+            it = cellTasks.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
     for (auto& fireCell : fireCellMap) {
         if (fireCell.second.altered) {
-            RE::BGSGrassManager* GrassMgr = RE::BGSGrassManager::GetSingleton();
-
-            REL::Relocation<std::uint8_t*> byteFlag{REL::ID(359446)};
-            *byteFlag = 0;
-            GrassMgr->RemoveGrassInCell(fireCell.first);
-            // Trigger new grass creation
-            std::uint8_t flag = 0;
-            GrassMgr->CreateGrassInCell(fireCell.first, &flag);
-            GrassMgr->ExecuteAllGrassTasks(fireCell.first, flag);
-            //*byteFlag = 1;
-
-            fireCell.second.altered = false;  // Reset altered state after processing
+            grassGenerationQueue.push(fireCell.first);  // Add to grass generation queue
+            fireCell.second.altered = false;            // Reset altered state
         }
-        for (int q = 0; q < 4; ++q) {
-            for (int v = 0; v < 289; ++v) {
-                auto& colors = fireCell.first->GetRuntimeData().cellLand->loadedData->colors[q][v];
-                if (fireCell.second.isBurning[q][v]) { 
+        if (cellTasks.find(fireCell.first) == cellTasks.end()) {
+            // async calculations
+            auto cell = fireCell.first;
+            cellTasks[cell] = std::async(std::launch::async, [this, cell, delta]() {
+                auto* set = Settings::GetSingleton();
+                FireCellState* fireCell = GetOrCreateFireCellState(cell);
+                for (int q = 0; q < 4; ++q) {
+                    for (int v = 0; v < 289; ++v) {
+                        auto& colors = cell->GetRuntimeData().cellLand->loadedData->colors[q][v];
+                        if (fireCell->isBurning[q][v]) {
 
-                    // ToDo: Get Wind Force and direction
-                    // ToDo: Neighbours veight (0.7 for diagonal, 1.0 for cardinal directions)
+                            FireVertex targetVertex{cell, q, v};
 
-                    FireVertex targetVertex{fireCell.first, q, v};
+                            auto isRaining = IsCurrentWeatherRaining();
+                            auto windData = GetCurrentWind();
 
-                    auto isRaining = IsCurrentWeatherRaining();
-                    auto windData = GetCurrentWind();
+                            auto neighbours = GetFireVertexNeighboursWeighted(targetVertex, windData);
 
-                    auto neighbours = GetFireVertexNeighbours(targetVertex);
+                            for (const auto& neighbour : neighbours) {
+                                float RainingFactor = isRaining ? set->RainingFactor : 1.0f;
+                                float damage = (((fireCell->heat[q][v] / set->HeatDistributionFactor) * delta) *
+                                                RainingFactor);
+                                // Damage neighbouring cells
+                                DamageFireCell(neighbour.vertex, damage * neighbour.weight, true);
+                            }
 
-                    for (const auto& neighbour : neighbours) {
-                        float RainingFactor = isRaining ? set->RainingFactor : 1.0f;
-                        float damage =
-                            (((fireCell.second.heat[q][v] / set->HeatDistributionFactor) * delta) * RainingFactor);
-                        // Damage neighbouring cells
-                        DamageFireCell(neighbour, damage, true);
-                    }
+                            // Decrease heat
+                            fireCell->heat[q][v] -=
+                                neighbours.size() * (fireCell->heat[q][v] / set->HeatDistributionFactor) * delta;
 
-                    // Decrease heat
-                    fireCell.second.heat[q][v] -=
-                        neighbours.size() * (fireCell.second.heat[q][v] / set->HeatDistributionFactor) * delta;
+                            // Decrease fuel amount
+                            fireCell->fuel[q][v] -= set->FuelConsumptionRate * delta;
+                            // Heat increases as fuel burns
+                            fireCell->heat[q][v] += set->FuelConsumptionRate * set->FuelToHeatRate * delta;
 
-                    // Decrease fuel amount
-                    fireCell.second.fuel[q][v] -= set->FuelConsumptionRate * delta;
-                    // Heat increases as fuel burns
-                    fireCell.second.heat[q][v] += set->FuelConsumptionRate * set->FuelToHeatRate * delta;
+                            // Mark as charred when burning stops
+                            if (fireCell->fuel[q][v] <= 0.0f) {
+                                fireCell->isBurning[q][v] = false;
+                                fireCell->isCharred[q][v] = true;
 
-                    // Mark as charred when burning stops
-                    if (fireCell.second.fuel[q][v] <= 0.0f) {
-                        fireCell.second.isBurning[q][v] = false;
-                        fireCell.second.isCharred[q][v] = true;
-
-                        colors[0] = 0;  // R
-                        colors[1] = 0;  // G
-                        colors[2] = 0;  // B
-                        // Mark the Cell as altered by fire
-                        fireCell.second.altered = true;
-                    } else {
-                        // Update color based on fuel left
-                        float fuelRatio = fireCell.second.fuel[q][v] / set->InitialFuelAmount;
-                        uint8_t colorValue = static_cast<uint8_t>(128.0f - (128.0f * (1.0f - fuelRatio)));
-                        if (colors[0] > colorValue || colors[1] > colorValue || colors[2] > colorValue) {
-                            colors[0] = colorValue;  // R
-                            colors[1] = colorValue;  // G
-                            colors[2] = colorValue;  // B
-                            // Mark the Cell as altered by fire
-                            fireCell.second.altered = true;
+                                colors[0] = 0;  // R
+                                colors[1] = 0;  // G
+                                colors[2] = 0;  // B
+                                // Mark the Cell as altered by fire
+                                fireCell->altered = true;
+                            } else {
+                                // Update color based on fuel left
+                                float fuelRatio = fireCell->fuel[q][v] / set->DefaultInitialFuelAmount;
+                                uint8_t colorValue = static_cast<uint8_t>(128.0f - (128.0f * (1.0f - fuelRatio)));
+                                if (colors[0] > colorValue || colors[1] > colorValue || colors[2] > colorValue) {
+                                    colors[0] = colorValue;  // R
+                                    colors[1] = colorValue;  // G
+                                    colors[2] = colorValue;  // B
+                                    // Mark the Cell as altered by fire
+                                    fireCell->altered = true;
+                                }
+                            }
+                        } else if (fireCell->heat[q][v] > 0) {
+                            // Cool down the fire cell if not burning
+                            fireCell->heat[q][v] -= set->SelfHeatLoss * delta;
                         }
                     }
-                } else if (fireCell.second.heat[q][v] > 0) {  
-                    // Cool down the fire cell if not burning
-                    fireCell.second.heat[q][v] -= set->SelfHeatLoss * delta;
                 }
-            }
+            });
+        }
+    }
+}
+
+void WildfireMgr::GenerateGrassInQueueCells() {
+    std::unique_lock fire_lock(grassGenerationMutex);
+    if (!grassGenerationQueue.empty()) {
+        auto* set = Settings::GetSingleton();
+        RE::BGSGrassManager* GrassMgr = RE::BGSGrassManager::GetSingleton();
+        for (int i = 0; i < set->GrassGenerationCellsPerFrameLimit && !grassGenerationQueue.empty(); i++) {
+            RE::TESObjectCELL* cell = grassGenerationQueue.front();
+
+            REL::Relocation<std::uint8_t*> GrassFadeFlag{REL::ID(359446)};
+            *GrassFadeFlag = false;
+            GrassMgr->RemoveGrassInCell(cell);
+            std::uint8_t flag = 0;
+            GrassMgr->CreateGrassInCell(cell, &flag);
+            GrassMgr->ExecuteAllGrassTasks(cell, flag);
+
+            grassGenerationQueue.pop();
         }
     }
 }
@@ -90,7 +120,11 @@ void WildfireMgr::AddFireEvent(const RE::NiPoint3& impactPos, float radius, floa
             float distance = Utils::GetWorldPosition(vertex).GetDistance(impactPos);
             if (distance < radius) {
                 float adjustedDamage = damage * (1.0f - (distance / radius));  // Scale damage by distance
-                DamageFireCell(vertex, adjustedDamage);
+                if (damage < 0) {
+                    CoolFireCell(vertex, -adjustedDamage);
+                } else {
+                    DamageFireCell(vertex, adjustedDamage);
+                }
             }
         }
     } else {
@@ -98,7 +132,11 @@ void WildfireMgr::AddFireEvent(const RE::NiPoint3& impactPos, float radius, floa
         if (Utils::GetWorldPosition(NearestVertex).GetDistance(impactPos) > 128.0f) {
             return;
         }
-        DamageFireCell(NearestVertex, damage);
+        if (damage < 0) {
+            CoolFireCell(NearestVertex, -damage);
+        } else {
+            DamageFireCell(NearestVertex, damage);
+        }
     }
 }
 
@@ -128,9 +166,9 @@ void WildfireMgr::DamageFireCell(const FireVertex target, float damage, bool mgr
                 // Mark the cell as altered by fire
                 cellState->altered = true;
             } else if (colors[0] != 0 || colors[1] != 0 || colors[2] != 0) {
-                colors[0] -= 0;  // R
-                colors[1] -= 0;  // G
-                colors[2] -= 0;  // B
+                colors[0] = 0;  // R
+                colors[1] = 0;  // G
+                colors[2] = 0;  // B
                 // Mark the cell as altered by fire
                 cellState->altered = true;
             }
@@ -147,7 +185,7 @@ void WildfireMgr::DamageFireCell(const FireVertex target, float damage, bool mgr
 
             auto HazardMgr = HazardMgr::GetSingleton();
             float HazardLifetime = cellState->fuel[quadrant][vertexIndex] / set->FuelConsumptionRate;
-            HazardMgr->SpawnHazardAtVertex(target, HazardMgr->FireDragonHazard, HazardLifetime);
+            HazardMgr->CreateBurningVertex(target, HazardLifetime);
 
         } else {
             auto& colors = target.cell->GetRuntimeData().cellLand->loadedData->colors[quadrant][vertexIndex];
@@ -175,10 +213,13 @@ void WildfireMgr::CoolFireCell(FireVertex target, float damage) {
         return;
     }  // If no fuel, can't burn, or already charred, do nothing
 
-    if (cellState->heat[quadrant][vertexIndex] <= 0) {
-        return;  // If no heat, nothing to cool down
+    if (cellState->heat[quadrant][vertexIndex] > 0) {
+        cellState->heat[quadrant][vertexIndex] -= damage;
+        if (cellState->isBurning[quadrant][vertexIndex] && cellState->heat[quadrant][vertexIndex] <= 0) {
+            cellState->heat[quadrant][vertexIndex] = 0;
+            cellState->isBurning[quadrant][vertexIndex] = false;
+        }
     }
-    cellState->heat[quadrant][vertexIndex] -= damage;
 }
 
 FireVertex WildfireMgr::FindNearestVertex(const RE::NiPoint3& pos) {
@@ -250,70 +291,79 @@ std::vector<FireVertex> WildfireMgr::FindNearestVertexsInRadius(const RE::NiPoin
     return result;
 }
 
+
 std::vector<WeightedNeighbour> WildfireMgr::GetFireVertexNeighboursWeighted(const FireVertex& vertex,
                                                                             WindData windData) {
-    constexpr int VERTS_PER_QUAD = 17;
     std::vector<WeightedNeighbour> result;
     if (!vertex.cell) return result;
 
-    int x = vertex.vertex % VERTS_PER_QUAD;
-    int y = vertex.vertex / VERTS_PER_QUAD;
-
-    // Directions: dx, dy, base weight
-    const std::vector<std::tuple<int, int, float>> directions = {
-        {0, -1, 1.0f},  // N
-        {1, 0, 1.0f},   // E
-        {0, 1, 1.0f},   // S
-        {-1, 0, 1.0f},  // W
-        {1, -1, 0.7f},  // NE
-        {1, 1, 0.7f},   // SE
-        {-1, 1, 0.7f},  // SW
-        {-1, -1, 0.7f}  // NW
-    };
-
-    for (const auto& [dx, dy, baseWeight] : directions) {
-        int nx = x + dx;
-        int ny = y + dy;
-        FireVertex neighbour = vertex;
-
-        // Use your existing logic to get the correct neighbour (quadrant/cell transition)
-        // For simplicity, use GetFireVertexNeighbours and filter by dx/dy if needed
-        // Or copy the logic from your GetFireVertexNeighbours
-
-        // Calculate wind effect
-        float windEffect = 1.0f;
-        if (windData.speed > 0.0f) {
-
-            /*
-            float windLen = std::sqrt(windDir.x * windDir.x + windDir.y * windDir.y);
-            if (windLen > 0.0f) {
-                float dirX = static_cast<float>(dx);
-                float dirY = static_cast<float>(dy);
-                float dirLen = std::sqrt(dirX * dirX + dirY * dirY);
-                if (dirLen > 0.0f) {
-                    // Dot product for alignment
-                    float dot = (dirX * windDir.x + dirY * windDir.y) / (dirLen * windLen);
-                    windEffect += windForce * dot;  // windForce scales the effect
-                }
-            }
-            */
+    std::vector<FireVertex> neighbours = GetFireVertexNeighbours(vertex);
+    if (neighbours.size() != 8) {
+        // Unexpected
+        for (auto neigh : neighbours) {
+            WeightedNeighbour wn{neigh, 1.0f};
+            result.push_back(wn);
         }
-
-        float finalWeight = baseWeight * windEffect;
-
-        // Get actual neighbour vertex
-        std::vector<FireVertex> nvec = GetFireVertexNeighbours(vertex);
-        for (const auto& n : nvec) {
-            int nx2 = n.vertex % VERTS_PER_QUAD;
-            int ny2 = n.vertex / VERTS_PER_QUAD;
-            if (nx2 == nx && ny2 == ny) {
-                result.push_back({n, finalWeight});
-                break;
-            }
-        }
+        return result;
     }
 
-    // Sort by weight descending
+    // Predefined direction vectors matching neighbour ordering:
+    // 0: NW, 1: N, 2: NE, 3: W, 4: E, 5: SW, 6: S, 7: SE
+    const std::array<std::pair<float, float>, 8> dirVec = {
+        std::make_pair(-1.0f, -1.0f),  // NW
+        std::make_pair(0.0f, -1.0f),   // N
+        std::make_pair(1.0f, -1.0f),   // NE
+        std::make_pair(-1.0f, 0.0f),   // W
+        std::make_pair(1.0f, 0.0f),    // E
+        std::make_pair(-1.0f, 1.0f),   // SW
+        std::make_pair(0.0f, 1.0f),    // S
+        std::make_pair(1.0f, 1.0f),    // SE
+    };
+
+    // Base weights aligning with earlier: cardinal=1.0, diagonal=0.7
+    const std::array<float, 8> baseWeights = {
+        0.7f,  // NW
+        1.0f,  // N
+        0.7f,  // NE
+        1.0f,  // W
+        1.0f,  // E
+        0.7f,  // SW
+        1.0f,  // S
+        0.7f,  // SE
+    };
+
+    // Wind direction vector (assumed radians)
+    float windDirX = std::cosf(static_cast<float>(windData.direction));
+    float windDirY = std::sinf(static_cast<float>(windData.direction));
+    float windLen = std::sqrt(windDirX * windDirX + windDirY * windDirY);
+    if (windLen > 0.0f) {
+        windDirX /= windLen;
+        windDirY /= windLen;
+    }
+
+    float windSpeedNorm = static_cast<float>(windData.speed) * 1.0f / 255.0f;  // normalized 0..~1
+
+    // For each neighbour, compute weight
+    size_t count = std::min(neighbours.size(), dirVec.size());
+    for (size_t i = 0; i < count; ++i) {
+        const FireVertex& neigh = neighbours[i];
+
+        // Direction unit vector for this neighbour
+        float neighDirX = dirVec[i].first;
+        float neighDirY = dirVec[i].second;
+        float len = std::sqrt(neighDirX * neighDirX + neighDirY * neighDirY);
+        if (len > 0.0f) {
+            neighDirX /= len;
+            neighDirY /= len;
+        }
+
+        float dot = windDirX * neighDirX + windDirY * neighDirY;
+        float windBoost = dot * windSpeedNorm * Settings::GetSingleton()->WindSpeedFactor;  // alignment * speed * factor
+        float finalWeight = baseWeights[i] * (1.0f + windBoost);
+
+        result.push_back(WeightedNeighbour{neigh, finalWeight});
+    }
+
     std::sort(result.begin(), result.end(),
               [](const WeightedNeighbour& a, const WeightedNeighbour& b) { return a.weight > b.weight; });
 
@@ -321,6 +371,7 @@ std::vector<WeightedNeighbour> WildfireMgr::GetFireVertexNeighboursWeighted(cons
 }
 
 FireCellState* WildfireMgr::GetOrCreateFireCellState(RE::TESObjectCELL* cell) {
+    std::unique_lock lock(fireCellMapMutex);
     auto it = fireCellMap.find(cell);
     if (it != fireCellMap.end()) {
         return &(it->second);
@@ -345,7 +396,9 @@ std::vector<FireVertex> WildfireMgr::GetFireVertexNeighbours(const FireVertex& v
     constexpr int VERTS_PER_QUAD = 17;
     constexpr int QUADS_PER_ROW = 2;
     std::vector<FireVertex> result;
-    if (!vertex.cell) return result;
+    if (!vertex.cell) {
+        return result;
+    }
 
     // Convert vertex index to (x, y) in the quadrant grid
     int x = vertex.vertex % VERTS_PER_QUAD;
@@ -414,7 +467,7 @@ std::vector<FireVertex> WildfireMgr::GetFireVertexNeighbours(const FireVertex& v
     return result;
 }
 
-std::pair<uint8_t, uint8_t> WildfireMgr::GetCurrentWind() {
+WindData WildfireMgr::GetCurrentWind() {
     auto sky = RE::Sky::GetSingleton();
     if (!sky || !sky->currentWeather) {
         return {0, 0};
