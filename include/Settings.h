@@ -36,7 +36,7 @@ public:
     float ColdDamageMultiplayer = 1.5f;      // Multiplier for damage from projectiles
     float WaterDamageMultiplayer = 1.0f;     // Multiplier for damage from projectiles
     float RainingFactor = 0.75f;             // Factor to reduce fire spread when raining
-    float WindSpeedFactor = 1.0f;            // Factor to influence fire spread based on wind speed
+    float WindSpeedFactor = 2.0f;            // Factor to influence fire spread based on wind speed
     float DefaultExplosionDamage = 50.0f;
     float DefaultDamage = 50.0f;
 };

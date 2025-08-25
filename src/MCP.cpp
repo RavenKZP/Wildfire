@@ -52,13 +52,24 @@ namespace MCP {
         ImGui::SliderFloat("Wind Speed Factor", &set->WindSpeedFactor, 0.1f, 10.0f, "%.1f");
     }
 
-    static const char* GetCompassLabel(float degrees) {
-        // 8-point compass: each slice is 45°, centered on N=0
-        // We'll offset so that N is [337.5, 22.5), NE is [22.5, 67.5), etc.
-        static const char* labels[8] = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
-        int idx = static_cast<int>(std::floor((degrees + 22.5f) / 45.0f)) & 7;
+    static const char* GetCompassLabel(uint8_t windDir) {
+        // Skyrim: 0=E, 64=N, 128=W, 192=S (full circle = 256)
+        static const char* labels[8] = {"E", "NE", "N", "NW", "W", "SW", "S", "SE"};
+
+        // Convert to degrees in [0, 360)
+        float degrees = (windDir / 256.0f) * 360.0f;
+
+        // Each compass slice is 45°, center them with +/- tolerance
+        constexpr float sliceSize = 45.0f;
+        constexpr float tolerance = 16.0f * 360.0f / 256.0f;  // ~22.5°, adjust if needed
+
+        // Shift degrees so bins line up (0° = East)
+        float shifted = std::fmod(degrees + tolerance, 360.0f);
+
+        int idx = static_cast<int>(shifted / sliceSize) % 8;
         return labels[idx];
     }
+
 
     void RenderWindDebug() {
         static auto WildfireMgr = WildfireMgr::GetSingleton();
@@ -69,17 +80,20 @@ namespace MCP {
         if (normSpeed < 0.0f) normSpeed = 0.0f;
         if (normSpeed > 1.0f) normSpeed = 1.0f;
 
-        constexpr float RAD2DEG = 180.0f / 3.14159265358979323846f;
-        float degrees = wind.direction * RAD2DEG;
-
-        degrees = std::fmod(degrees, 360.0f);
-        if (degrees < 0.0f) degrees += 360.0f;
-
-        const char* compass = GetCompassLabel(degrees);
+        const char* compass = GetCompassLabel(wind.direction);
 
         ImGui::Text("Wind Data:");
         ImGui::BulletText("Speed: %u (normalized %.2f)", wind.speed, normSpeed);
-        ImGui::BulletText("Direction: %.1f° (%s)", degrees, compass);
+        ImGui::BulletText("Direction: %s", compass);
+
+        auto sky = RE::Sky::GetSingleton();
+        auto& data = sky->currentWeather->data;
+        int windSpeed = data.windSpeed;
+        int windDirection = data.windDirection;
+        ImGui::SliderInt("Wind Speed", &windSpeed, 0, 255);
+        ImGui::SliderInt("Wind Direction", &windDirection, 0, 255);
+        data.windSpeed = windSpeed;
+        data.windDirection = windDirection;
     }
 
     void __stdcall RenderWildfireMgr() {

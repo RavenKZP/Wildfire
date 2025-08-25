@@ -151,7 +151,7 @@ namespace Hooks {
         hazardUpdateTimeAccumulator += a_delta;
         if (hazardUpdateTimeAccumulator > set->HazardPeriodicUpdateTime) {
             auto start = std::chrono::high_resolution_clock::now();
-            WildfireMgr::GetSingleton()->PeriodicUpdate(hazardUpdateTimeAccumulator);
+            HazardMgr::GetSingleton()->PeriodicUpdate(hazardUpdateTimeAccumulator);
             auto end = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double, std::milli> duration = end - start;
             logger::debug("Hazard Periodic Update in {} ms", duration.count());

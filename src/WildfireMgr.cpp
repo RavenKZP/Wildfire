@@ -96,20 +96,22 @@ void WildfireMgr::PeriodicUpdate(float delta) {
 void WildfireMgr::GenerateGrassInQueueCells() {
     std::unique_lock fire_lock(grassGenerationMutex);
     if (!grassGenerationQueue.empty()) {
+        logger::debug("Generating grass in {} queued cells", grassGenerationQueue.size());
         auto* set = Settings::GetSingleton();
         RE::BGSGrassManager* GrassMgr = RE::BGSGrassManager::GetSingleton();
+        std::uint8_t flag = 0;
+
         for (int i = 0; i < set->GrassGenerationCellsPerFrameLimit && !grassGenerationQueue.empty(); i++) {
             RE::TESObjectCELL* cell = grassGenerationQueue.front();
 
             REL::Relocation<std::uint8_t*> GrassFadeFlag{REL::ID(359446)};
             *GrassFadeFlag = false;
             GrassMgr->RemoveGrassInCell(cell);
-            std::uint8_t flag = 0;
             GrassMgr->CreateGrassInCell(cell, &flag);
-            GrassMgr->ExecuteAllGrassTasks(cell, flag);
 
             grassGenerationQueue.pop();
         }
+        GrassMgr->ExecuteAllGrassTasks(nullptr, flag);
     }
 }
 
@@ -149,6 +151,9 @@ bool WildfireMgr::IsCellAltered(RE::TESObjectCELL* cell) {
 }
 
 void WildfireMgr::DamageFireCell(const FireVertex target, float damage, bool mgr) {
+    if (damage <= 0.0f) {
+        return;  // No damage to apply
+    }
     auto* set = Settings::GetSingleton();
     FireCellState* cellState = GetOrCreateFireCellState(target.cell);
     int quadrant = target.quadrant;
@@ -333,8 +338,11 @@ std::vector<WeightedNeighbour> WildfireMgr::GetFireVertexNeighboursWeighted(cons
     };
 
     // Wind direction vector (assumed radians)
-    float windDirX = std::cosf(static_cast<float>(windData.direction));
-    float windDirY = std::sinf(static_cast<float>(windData.direction));
+    constexpr float M_PI = 3.14159265358979323846f;
+    float angle = (static_cast<float>(windData.direction) / 256.0f) * 2.0f * static_cast<float>(M_PI);
+    float windDirX = std::cosf(angle);
+    float windDirY = std::sinf(angle);
+
     float windLen = std::sqrt(windDirX * windDirX + windDirY * windDirY);
     if (windLen > 0.0f) {
         windDirX /= windLen;
