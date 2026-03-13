@@ -6,16 +6,16 @@
 #define VERTS_PER_QUAD_ROW 17
 #define QUADS_PER_ROW 2
 #define VERTS_STEP 128  // world units between vertices
-#define CELL_SIZE 4096
-#define QUAD_SIZE 2048
-#define RGB_CHANNELS 3
+#define CELL_SIZE 4096  // world units
+#define QUAD_SIZE 2048  // world units
+#define RGB_CHANNELS 3 // Red, Green, Blue
 
 #define M_PI 3.14159265358979323846f
 
 using BoundaryBox = std::array<RE::NiPoint3, 8>;
 
-enum ImpactType {
-    Unknown = 0,
+enum ElementType {
+    Neutral = 0,
     Fire,
     Shock,
     Cold,
@@ -40,27 +40,25 @@ struct GrassEvent {
     RE::NiPoint3 pos;
     float radius;
     float damage;
-    ImpactType type;
+    ElementType type;
 };
 
 struct RefEvent {
-    RE::TESObjectREFR* obj;
+    RE::ObjectRefHandle refHandle;
     float damage;
-    ImpactType type;
+    ElementType type;
 };
 
-struct GrassFireConfig {
-    RE::FormID formID;
+struct GrassConfig {
     bool canBurn;
-    uint16_t fuel;
-    uint16_t minBurnHeat;
+    float fuel;
+    float ignitionHeat;
 };
 
-struct TreeFireConfig {
-    RE::FormID formID;
+struct RefConfig {
     bool canBurn;
-    uint16_t fuel;
-    uint16_t minBurnHeat;
+    float fuel;
+    float ignitionHeat;
 };
 
 struct WindData {
@@ -87,8 +85,9 @@ struct CellState {
     uint8_t newColors[CELL_QUAD_COUNT][VERTS_PER_QUAD][RGB_CHANNELS];
     float heat[CELL_QUAD_COUNT][VERTS_PER_QUAD];
     float usedHeat[CELL_QUAD_COUNT][VERTS_PER_QUAD];
-    float minBurnHeat[CELL_QUAD_COUNT][VERTS_PER_QUAD];
+    float ignitionHeat[CELL_QUAD_COUNT][VERTS_PER_QUAD];
     float fuel[CELL_QUAD_COUNT][VERTS_PER_QUAD];
+    // ToDo: Make them Flags to take less space
     bool canBurn[CELL_QUAD_COUNT][VERTS_PER_QUAD];
     bool isBurning[CELL_QUAD_COUNT][VERTS_PER_QUAD];
     bool isCharred[CELL_QUAD_COUNT][VERTS_PER_QUAD];
@@ -106,14 +105,17 @@ struct RefState {
     BoundaryBox BBox;
 
     float heat;
-    float minBurnHeat;
+    float ignitionHeat;
     float initialFuel;
     float fuel;
-    bool halfEvent;
+
+    // ToDo: Make them Flags to take less space
     bool canBurn;
     bool isBurning;
     bool isCharred;
-    bool isFrozen; // Let ig GO, Let it GOOOOOOOOO
+    bool isUnderwater;
+    bool isFrozen;  // Let ig GO, Let it GOOOOOOOOO
+    bool halfEvent;
 
     RefState(RE::TESObjectREFR* ref);
 };
@@ -138,7 +140,19 @@ struct SpawnHazardData {
     HazardType size;  // 1=small_hazards, 2=medium, 3=large
 };
 
+struct ObjectRefHandleHash {
+    std::size_t operator()(const RE::ObjectRefHandle& h) const noexcept {
+        return std::hash<std::uint32_t>()(h.native_handle());
+    }
+};
+
+struct ObjectRefHandleEqual {
+    bool operator()(const RE::ObjectRefHandle& a, const RE::ObjectRefHandle& b) const noexcept {
+        return a.native_handle() == b.native_handle();
+    }
+};
+
 using GrassEventType = std::vector<GrassEvent>;
 using RefEventType = std::vector<RefEvent>;
 using CellStateMapType = std::unordered_map<RE::TESObjectCELL*, CellState>;
-using RefStateMapType = std::unordered_map<RE::TESObjectREFR*, RefState>;
+using RefStateMapType = std::unordered_map<RE::ObjectRefHandle, RefState, ObjectRefHandleHash, ObjectRefHandleEqual>;

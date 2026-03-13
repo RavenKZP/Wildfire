@@ -4,6 +4,7 @@
 #include "Utils.h"
 
 FireVertex::FireVertex(CellAsCoords cell, int quadrant, int vertex) {
+    static auto* tes = RE::TES::GetSingleton();
     this->cell = cell;
     this->quadrant = quadrant;
     this->vertex = vertex;
@@ -26,7 +27,7 @@ FireVertex::FireVertex(CellAsCoords cell, int quadrant, int vertex) {
     float vertWorldY = quadWorldY + vy * VERTS_STEP;
     float vertWorldZ = 0.0f;
     // Get land height at vertex position
-    RE::TES::GetSingleton()->GetLandHeight(RE::NiPoint3{vertWorldX, vertWorldY, 0.0f}, vertWorldZ);
+    tes->GetLandHeight(RE::NiPoint3{vertWorldX, vertWorldY, 0.0f}, vertWorldZ);
 
     worldsPos = RE::NiPoint3{vertWorldX, vertWorldY, vertWorldZ};
 }
@@ -34,10 +35,12 @@ FireVertex::FireVertex(CellAsCoords cell, int quadrant, int vertex) {
 // Never ever call this outside of the main thread
 CellState::CellState(RE::TESObjectCELL* cell) {
     auto start = std::chrono::high_resolution_clock::now();
+    static auto* set = Settings::GetSingleton();
 
+    cellAsCoordinates = {0, 0};
     valid = false; // assume invalid
     std::memset(canBurn, false, sizeof(canBurn));
-    std::memset(minBurnHeat, 0, sizeof(minBurnHeat));
+    std::memset(ignitionHeat, 0, sizeof(ignitionHeat));
     std::memset(fuel, 0, sizeof(fuel));
     std::memset(originalColors, 0, sizeof(originalColors));
     std::memset(newColors, 0, sizeof(newColors));
@@ -60,13 +63,10 @@ CellState::CellState(RE::TESObjectCELL* cell) {
         logger::error("CellState initialized with interior cell");
     }
 
-    if (!cell->GetRuntimeData().cellLand || !cell->GetRuntimeData().cellLand->loadedData) {
-        logger::error("CellState initialized with cell that has no loaded land data");
-        return;
-    }
-    auto cellLand = cell->GetRuntimeData().cellLand;
-    if (!cellLand->loadedData->colors) {
-        logger::error("CellState initialized with cell that has no color data");
+    auto cellLand = cell->GetLandscape();
+    if (!cellLand) {
+        logger::error("CellState ({}, {}) initialized with cell that has no cellLand data", cellAsCoordinates.cellX,
+                      cellAsCoordinates.cellY);
         return;
     }
 
@@ -76,12 +76,11 @@ CellState::CellState(RE::TESObjectCELL* cell) {
     std::memcpy(originalColors, colors, sizeof(colors));
     std::memcpy(newColors, colors, sizeof(colors));
 
-    auto* set = Settings::GetSingleton();
     for (int q = 0; q < CELL_QUAD_COUNT; ++q) {
         for (int v = 0; v < VERTS_PER_QUAD; ++v) {
             bool canBurnVal = false;
-            float fuelVal = set->DefaultInitialFuelAmount;
-            float minBurnHeatVal = set->DefaultMinHeatToBurn;
+            float fuelVal = set->DefaultGrassFuel;
+            float ignitionHeatVal = set->DefaultGrassIgnitionHeat;
 
             // Check if vertex is underwater
             auto vertPos = FireVertex(cellAsCoordinates, q, v).worldsPos;
@@ -116,42 +115,143 @@ CellState::CellState(RE::TESObjectCELL* cell) {
                     }
 
                     // Check grass list
+                    float totalFuel = 0.0f;
+                    float totalIgnition = 0.0f;
+                    int grassCount = 0;
+
                     for (const auto& grass : tex->textureGrassList) {
-                        if (grass) {
-                            // If any grass type is burnable, the vertex can burn
-                            canBurnVal = true;  // Temporary solution
-                            // fuelVal = ;
-                            // minBurnHeatVal = ;
+                        if (!grass) {
+                            continue;
                         }
+
+                        auto grassFormID = grass->GetFormID();
+                        auto it = set->grassConfig.find(grassFormID);
+
+                        if (it != set->grassConfig.end()) {
+                            const auto& cfg = it->second;
+
+                            if (cfg.canBurn) {
+                                canBurnVal = true;
+
+                                totalFuel += cfg.fuel;
+                                totalIgnition += cfg.ignitionHeat;
+
+                                grassCount++;
+                            }
+                        } else {
+                            canBurnVal = true;
+                            totalFuel += set->DefaultGrassFuel;
+                            totalIgnition += set->DefaultGrassIgnitionHeat;
+                            grassCount++;
+                        }
+                    }
+
+                    if (grassCount > 0) {
+                        fuelVal = totalFuel / grassCount;
+                        ignitionHeatVal = totalIgnition / grassCount;
                     }
                 }
             }
             canBurn[q][v] = canBurnVal;
             fuel[q][v] = fuelVal;
-            minBurnHeat[q][v] = minBurnHeatVal;
+            ignitionHeat[q][v] = ignitionHeatVal;
         }
     }
 
     valid = true;
     auto end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> elapsed = end - start;
-    logger::debug("Initialized CellState for cell ({}, {}) in {} ms", cellAsCoordinates.cellX,
+    logger::debug("Initialized CellState ({}, {}) in {} ms", cellAsCoordinates.cellX,
                  cellAsCoordinates.cellY, elapsed.count());
 }
 
 RefState::RefState(RE::TESObjectREFR* ref) {
+    auto start = std::chrono::high_resolution_clock::now();
+    static auto* set = Settings::GetSingleton();
+    static auto* tes = RE::TES::GetSingleton();
+
     heat = 0.0f;
-    initialFuel = 50.0f;
-    minBurnHeat = 50.0f;  // Temporary default values
-    fuel = 50.0f;
-    halfEvent = false;
+    fuel = set->DefaultRefFuel;
+    initialFuel = fuel;
+    ignitionHeat = set->DefaultRefIgnitionHeat;
+
+    canBurn = false;
     isBurning = false;
     isCharred = false;
     isFrozen = false;
+    isUnderwater = false;
+    halfEvent = false;
+
     if (!ref) {
         return;
     }
-    position = ref->GetPosition();
+
+    auto base = ref->GetBaseObject();
+    if (!base) {
+        return;
+    }
+
+    auto formID = base->GetFormID();
+
+    // -------------------------
+    // 1. Excluded Trees Check
+    // -------------------------
+    if (base->Is(RE::FormType::Tree)) {
+        if (set->excludedTrees.contains(formID)) {
+            return;
+        }
+        canBurn = true;
+    }
+
+    // -------------------------
+    // 2. Config Overrides
+    // -------------------------
+    if (auto it = set->refsConfig.find(formID); it != set->refsConfig.end()) {
+        const auto& cfg = it->second;
+
+        canBurn = cfg.canBurn;
+        fuel = cfg.fuel;
+        initialFuel = fuel;
+        ignitionHeat = cfg.ignitionHeat;
+    }
+
+    // -------------------------
+    // 3. Transform / Bounding Box
+    // -------------------------
+    position = Utils::GetPosition(ref);
     angle = ref->GetAngle();
     BBox = Utils::GetBoundingBox(ref);
+
+    // -------------------------
+    // 4. Underwater Detection
+    // -------------------------
+    auto* cell = ref->GetParentCell();
+
+    if (cell) {
+        float minZ = BBox[0].z;
+        float maxZ = BBox[0].z;
+
+        for (const auto& v : BBox) {
+            minZ = std::min(minZ, v.z);
+            maxZ = std::max(maxZ, v.z);
+        }
+
+        auto waterHeight = tes->GetWaterHeight(position, cell);
+
+        float totalHeight = maxZ - minZ;
+        float aboveWaterHeight = maxZ - std::max(minZ, waterHeight);
+
+        float ratio = aboveWaterHeight / totalHeight;
+
+        constexpr float burnThreshold = 0.30f;
+
+        if (ratio < burnThreshold) {
+            isUnderwater = true;
+        }
+    }
+
+    auto end = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double, std::milli> elapsed = end - start;
+    logger::debug("Initialized RefState {:X} | burn:{} fuel:{} underwater:{} in {} ms", ref->GetFormID(), canBurn, fuel,
+                  isUnderwater, elapsed.count());
 }

@@ -25,6 +25,8 @@ public:
     void ClearResult();
 
     void SpawnHazards();
+    void SetHazardsLifetine(float lifetime);
+    void SetHazardsPCOnly(bool PCOnly);
 
 private:
     ResultType HazardUpdateLogic(const CellStateMapType cellStateMap, const RefStateMapType burningRefs);

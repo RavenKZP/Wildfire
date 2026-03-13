@@ -11,6 +11,7 @@
 
 class WildfireMgr : public REX::Singleton<WildfireMgr> {
 public:
+    WildfireMgr();
 
     void PeriodicUpdate(float delta);
 
@@ -18,20 +19,28 @@ public:
     void HazardUpdate();
     bool RefUpdate(float delta);
 
+    void SetHazardsLifetine(float lifetime);
+
     void ProcessCone(RE::Projectile* a_proj);
     void ProcessImpact(RE::Projectile* a_proj, RE::TESObjectREFR* a_ref, const RE::NiPoint3& pos);
     void ProcessExplosion(RE::Explosion* exp);
 
-    void AddGrassEvent(const RE::NiPoint3& impactPos, float radius, float damage, ImpactType type);
-    void AddRefEvent(RE::TESObjectREFR* ref, float damage, ImpactType type);
+    void AddGrassEvent(const RE::NiPoint3& impactPos, float radius, float damage, ElementType type);
+    void AddRefEvent(RE::TESObjectREFR* ref, float damage, ElementType type);
+    void SendHitEvent(RE::TESObjectREFR* ref);
+
+    void SetHazardsPCOnly(bool PCOnly);
 
     void OnGameLoad();
     void OnGameSave();
 
     // For MCP debug
     CellStateMapType GetCellStateMapCopy();
+    RefStateMapType GetRefStateMapCopy();
 
 private:
+    RE::Actor* Wildfire_Spirit;
+
     // Queue of fire events
     std::shared_mutex grassEventMutex;
     GrassEventType grassEventQueue;

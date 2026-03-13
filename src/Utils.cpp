@@ -28,6 +28,9 @@ namespace Utils {
     // BOUNDARY BOX
 
     static RE::bhkRigidBody* GetRigidBody(const RE::TESObjectREFR* refr) {
+        if (refr) {
+            return nullptr;
+        }
         const auto object3D = refr->Get3D();
         if (!object3D) {
             return nullptr;
@@ -62,6 +65,9 @@ namespace Utils {
     }
 
     RE::NiPoint3 GetPosition(const RE::TESObjectREFR* obj) {
+        if (!obj) {
+            return {0, 0, 0};
+        }
         const auto body = GetRigidBody(obj);
         if (!body) return obj->GetPosition();
         RE::hkVector4 havockPosition;
@@ -78,22 +84,76 @@ namespace Utils {
         if (!ref) {
             return false;
         }
+        static auto* set = Settings::GetSingleton();
         auto base = ref->GetBaseObject();
         if (!base) {
             return false;
         }
-        // ToDo: Add exclude list from settings
-        if (base->Is(RE::FormType::Tree)) {
-            return true;
+
+        // 1. Exact FormID check (fast)
+        auto fidIt = set->refsConfig.find(base->GetFormID());
+        if (fidIt != set->refsConfig.end()) {
+            logger::debug("Found ref in refsConfig");
+            return fidIt->second.canBurn;
         }
 
-        // ToDo: Add Include list from settings
-        if (base->Is(RE::FormType::Flora) || base->Is(RE::FormType::Static) ||
-            base->Is(RE::FormType::MovableStatic) || base->Is(RE::FormType::Activator) ||
-            base->Is(RE::FormType::Container)) {
-            return false;
+        // 2. Trees always true without excluded
+        if (base->Is(RE::FormType::Tree)) {
+            auto fidIt = set->excludedTrees.find(base->GetFormID());
+            if (fidIt != set->excludedTrees.end()) {
+                logger::debug("Found tree in excludedTrees");
+                return false;
+            }
+            return true;
         }
         return false;
+    }
+
+    bool IsOIFSupported(RE::TESObjectREFR* ref) {
+        if (!ref) {
+            return false;
+        }
+
+        auto base = ref->GetBaseObject();
+        if (!base) {
+            return false;
+        }
+
+        using FT = RE::FormType;
+
+        switch (base->GetFormType()) {
+            case FT::Activator:
+            case FT::TalkingActivator:
+            case FT::Weapon:
+            case FT::Armor:
+            case FT::Ammo:
+            case FT::Ingredient:
+            case FT::Misc:
+            case FT::KeyMaster:
+            case FT::Book:
+            case FT::Note:
+            case FT::Scroll:
+            case FT::SoulGem:
+            case FT::AlchemyItem:  // potion + food
+            case FT::Furniture:
+            case FT::Door:
+            case FT::Flora:
+            case FT::Container:
+            case FT::Static:
+            case FT::MovableStatic:
+            case FT::Tree:
+            case FT::Light:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    bool IsPapyrusSupported(RE::TESObjectREFR* ref) {
+        if (!ref) {
+            return false;
+        }
+        return true;
     }
 
     std::string ToLower(std::string s) {
@@ -111,194 +171,199 @@ namespace Utils {
         return false;
     }
 
-    ImpactType GetProjectileType(RE::Projectile* proj) {
-        if (!proj) {
-            return ImpactType::Unknown;
+    ElementType GetProjectileType(RE::Projectile* proj) {
+        static std::unordered_map<RE::TESForm*, ElementType> detectionCache;  // cache by base object
+        static auto* set = Settings::GetSingleton();
+
+        if (!proj) return ElementType::Neutral;
+
+        auto* base = proj->GetBaseObject();
+        if (!base) return ElementType::Neutral;
+
+        // 1. Exact FormID check (fast)
+        auto fidIt = set->sourceForms.find(base->GetFormID());
+        if (fidIt != set->sourceForms.end()) {
+            logger::debug("Found projectile in sourceForms");
+            return fidIt->second;
         }
 
-        auto* set = Settings::GetSingleton();
+        // 2. Check cache by base object
+        auto cacheIt = detectionCache.find(base);
+        if (cacheIt != detectionCache.end()) {
+            logger::debug("Found projectile in detectionCache");
+            return cacheIt->second;
+        }
 
-        // 1. Source spell/magic item
+        ElementType type = ElementType::Neutral;
+
+        // Helper lambda for string pattern detection
+        auto CheckPatterns = [&](RE::TESForm* form) -> ElementType {
+            if (!form) return ElementType::Neutral;
+
+            auto TryMatch = [&](const std::string& str) -> ElementType {
+                std::string lowerStr = ToLower(str);
+                if (MatchesAnyPattern(lowerStr, set->fireSources)) return ElementType::Fire;
+                if (MatchesAnyPattern(lowerStr, set->shockSources)) return ElementType::Shock;
+                if (MatchesAnyPattern(lowerStr, set->coldSources)) return ElementType::Cold;
+                if (MatchesAnyPattern(lowerStr, set->waterSources)) return ElementType::Water;
+                return ElementType::Neutral;
+            };
+
+            if (auto editorID = form->GetFormEditorID()) {
+                type = TryMatch(editorID);
+                if (type != ElementType::Neutral) return type;
+            }
+            if (auto fullName = form->GetName()) {
+                type = TryMatch(fullName);
+                if (type != ElementType::Neutral) return type;
+            }
+
+            return ElementType::Neutral;
+        };
+
+        // 3. Check spell source
         if (auto spellSource = proj->GetProjectileRuntimeData().spell) {
-            if (auto editorID = spellSource->GetFormEditorID()) {
-                std::string lowerID = ToLower(editorID);
-                if (MatchesAnyPattern(lowerID, set->fireSources)) {
-                    return ImpactType::Fire;
-                }
-                if (MatchesAnyPattern(lowerID, set->shockSources)) {
-                    return ImpactType::Shock;
-                }
-                if (MatchesAnyPattern(lowerID, set->coldSources)) {
-                    return ImpactType::Cold;
-                }
-                if (MatchesAnyPattern(lowerID, set->waterSources)) {
-                    return ImpactType::Water;
-                }
-            }
-            if (auto fulName = spellSource->GetFullName()) {
-                std::string lowerID = ToLower(fulName);
-                if (MatchesAnyPattern(lowerID, set->fireSources)) {
-                    return ImpactType::Fire;
-                }
-                if (MatchesAnyPattern(lowerID, set->shockSources)) {
-                    return ImpactType::Shock;
-                }
-                if (MatchesAnyPattern(lowerID, set->coldSources)) {
-                    return ImpactType::Cold;
-                }
-                if (MatchesAnyPattern(lowerID, set->waterSources)) {
-                    return ImpactType::Water;
-                }
+            type = CheckPatterns(spellSource);
+            if (type != ElementType::Neutral) {
+                detectionCache[base] = type;
+                return type;
             }
 
-            // Check base effects of the spell
-            for (auto MagEf : spellSource->effects) {
-                if (MagEf && MagEf->baseEffect) {
-                    if (auto editorID = MagEf->baseEffect->GetFormEditorID()) {
-                        std::string lowerID = ToLower(editorID);
-                        if (MatchesAnyPattern(lowerID, set->fireSources)) {
-                            return ImpactType::Fire;
-                        }
-                        if (MatchesAnyPattern(lowerID, set->shockSources)) {
-                            return ImpactType::Shock;
-                        }
-                        if (MatchesAnyPattern(lowerID, set->coldSources)) {
-                            return ImpactType::Cold;
-                        }
-                        if (MatchesAnyPattern(lowerID, set->waterSources)) {
-                            return ImpactType::Water;
-                        }
-                    }
-                    if (auto fullName = MagEf->baseEffect->GetFullName()) {
-                        std::string lowerID = ToLower(fullName);
-                        if (MatchesAnyPattern(lowerID, set->fireSources)) {
-                            return ImpactType::Fire;
-                        }
-                        if (MatchesAnyPattern(lowerID, set->shockSources)) {
-                            return ImpactType::Shock;
-                        }
-                        if (MatchesAnyPattern(lowerID, set->coldSources)) {
-                            return ImpactType::Cold;
-                        }
-                        if (MatchesAnyPattern(lowerID, set->waterSources)) {
-                            return ImpactType::Water;
-                        }
+            // Check base effects
+            for (auto magEf : spellSource->effects) {
+                if (magEf && magEf->baseEffect) {
+                    type = CheckPatterns(magEf->baseEffect);
+                    if (type != ElementType::Neutral) {
+                        detectionCache[base] = type;
+                        return type;
                     }
                 }
             }
         }
 
-        // 2. Ammo source
-        if (auto ammoSource = proj->GetProjectileRuntimeData().ammoSource) {
-            if (auto editorID = ammoSource->GetFormEditorID()) {
-                std::string lowerID = ToLower(editorID);
-                if (MatchesAnyPattern(lowerID, set->fireSources)) {
-                    return ImpactType::Fire;
-                }
-                if (MatchesAnyPattern(lowerID, set->shockSources)) {
-                    return ImpactType::Shock;
-                }
-                if (MatchesAnyPattern(lowerID, set->coldSources)) {
-                    return ImpactType::Cold;
-                }
-                if (MatchesAnyPattern(lowerID, set->waterSources)) {
-                    return ImpactType::Water;
-                }
-            }
-            if (auto fullName = ammoSource->GetFullName()) {
-                std::string lowerID = ToLower(fullName);
-                if (MatchesAnyPattern(lowerID, set->fireSources)) {
-                    return ImpactType::Fire;
-                }
-                if (MatchesAnyPattern(lowerID, set->shockSources)) {
-                    return ImpactType::Shock;
-                }
-                if (MatchesAnyPattern(lowerID, set->coldSources)) {
-                    return ImpactType::Cold;
-                }
-                if (MatchesAnyPattern(lowerID, set->waterSources)) {
-                    return ImpactType::Water;
-                }
-            }
+        // 4. Ammo source
+        type = CheckPatterns(proj->GetProjectileRuntimeData().ammoSource);
+        if (type != ElementType::Neutral) {
+            detectionCache[base] = type;
+            return type;
         }
 
-        // 3. Weapon source
-        if (auto weapSource = proj->GetProjectileRuntimeData().weaponSource) {
-            if (auto editorID = weapSource->GetFormEditorID()) {
-                std::string lowerID = ToLower(editorID);
-                if (MatchesAnyPattern(lowerID, set->fireSources)) {
-                    return ImpactType::Fire;
-                }
-                if (MatchesAnyPattern(lowerID, set->shockSources)) {
-                    return ImpactType::Shock;
-                }
-                if (MatchesAnyPattern(lowerID, set->coldSources)) {
-                    return ImpactType::Cold;
-                }
-                if (MatchesAnyPattern(lowerID, set->waterSources)) {
-                    return ImpactType::Water;
-                }
-            }
-            if (auto fullName = weapSource->GetFullName()) {
-                std::string lowerID = ToLower(fullName);
-                if (MatchesAnyPattern(lowerID, set->fireSources)) {
-                    return ImpactType::Fire;
-                }
-                if (MatchesAnyPattern(lowerID, set->shockSources)) {
-                    return ImpactType::Shock;
-                }
-                if (MatchesAnyPattern(lowerID, set->coldSources)) {
-                    return ImpactType::Cold;
-                }
-                if (MatchesAnyPattern(lowerID, set->waterSources)) {
-                    return ImpactType::Water;
-                }
-            }
+        // 5. Weapon source
+        type = CheckPatterns(proj->GetProjectileRuntimeData().weaponSource);
+        if (type != ElementType::Neutral) {
+            detectionCache[base] = type;
+            return type;
         }
 
-        // 4. Projectile's own ID/name
-        if (auto editorID = proj->GetFormEditorID()) {
-            std::string lowerID = ToLower(editorID);
-            if (MatchesAnyPattern(lowerID, set->fireSources)) {
-                return ImpactType::Fire;
-            }
-            if (MatchesAnyPattern(lowerID, set->shockSources)) {
-                return ImpactType::Shock;
-            }
-            if (MatchesAnyPattern(lowerID, set->coldSources)) {
-                return ImpactType::Cold;
-            }
-            if (MatchesAnyPattern(lowerID, set->waterSources)) {
-                return ImpactType::Water;
-            }
-        }
-        return ImpactType::Unknown;
+        // 6. Projectile's own base object
+        type = CheckPatterns(base);
+        detectionCache[base] = type;
+        return type;
     }
 
-    ImpactType GetExplosionType(RE::Explosion* exp) {
-        if (!exp) {
-            return ImpactType::Unknown;
+    ElementType GetExplosionType(RE::Explosion* exp) {
+        static std::unordered_map<RE::TESForm*, ElementType> detectionCache;  // cache by base object
+        static auto* set = Settings::GetSingleton();
+
+        if (!exp) return ElementType::Neutral;
+
+        auto* base = exp->GetBaseObject();
+        if (!base) return ElementType::Neutral;
+
+        // 1. Exact FormID lookup (fast)
+        auto fidIt = set->sourceForms.find(base->GetFormID());
+        if (fidIt != set->sourceForms.end()) {
+            logger::debug("Found explosion in sourceForms");
+            return fidIt->second;
         }
 
-        auto set = Settings::GetSingleton();
+        // 2. Cache check
+        auto cacheIt = detectionCache.find(base);
+        if (cacheIt != detectionCache.end()) {
+            logger::debug("Found explosion in detectionCache");
+            return cacheIt->second;
+        }
 
-        if (auto base = exp->GetBaseObject()) {
-            if (auto model = base->As<RE::TESModel>()) {
-                std::string lowerID = ToLower(model->model.c_str());
-                if (MatchesAnyPattern(lowerID, set->fireSources)) {
-                    return ImpactType::Fire;
-                }
-                if (MatchesAnyPattern(lowerID, set->shockSources)) {
-                    return ImpactType::Shock;
-                }
-                if (MatchesAnyPattern(lowerID, set->coldSources)) {
-                    return ImpactType::Cold;
-                }
-                if (MatchesAnyPattern(lowerID, set->waterSources)) {
-                    return ImpactType::Water;
-                }
+        ElementType type = ElementType::Neutral;
+
+        // 3. Helper lambda for pattern matching
+        auto CheckPatterns = [&](RE::TESForm* form) -> ElementType {
+            if (!form) return ElementType::Neutral;
+
+            auto TryMatch = [&](const std::string& str) -> ElementType {
+                std::string lowerStr = ToLower(str);
+                if (MatchesAnyPattern(lowerStr, set->fireSources)) return ElementType::Fire;
+                if (MatchesAnyPattern(lowerStr, set->shockSources)) return ElementType::Shock;
+                if (MatchesAnyPattern(lowerStr, set->coldSources)) return ElementType::Cold;
+                if (MatchesAnyPattern(lowerStr, set->waterSources)) return ElementType::Water;
+                return ElementType::Neutral;
+            };
+
+            if (auto editorID = form->GetFormEditorID()) {
+                type = TryMatch(editorID);
+                if (type != ElementType::Neutral) return type;
+            }
+            if (auto fullName = form->GetName()) {
+                type = TryMatch(fullName);
+                if (type != ElementType::Neutral) return type;
+            }
+            if (auto model = form->As<RE::TESModel>()) {
+                type = TryMatch(model->model.c_str());
+                if (type != ElementType::Neutral) return type;
+            }
+
+            return ElementType::Neutral;
+        };
+
+        type = CheckPatterns(base);
+        detectionCache[base] = type;
+        return type;
+    }
+
+    float GetDamageFromProjectile(RE::Projectile* proj) {
+        if (!proj) {
+            return 0.0f;
+        }
+
+        float ret = 0.0f;
+
+        const auto& data = proj->GetProjectileRuntimeData();
+
+        if (data.weaponSource) {
+            if (data.weaponSource->attackDamage > 0.0f) {
+                ret = static_cast<float>(data.weaponSource->attackDamage);
             }
         }
-        return ImpactType::Unknown;
+
+        if (data.ammoSource) {
+            auto ammoRuntimeData = data.ammoSource->GetRuntimeData().data;
+            if (ammoRuntimeData.damage > 0.0f) {
+                ret = static_cast<float>(ammoRuntimeData.damage);
+            }
+        }
+
+        if (data.spell) {
+            float spellDamage = 0.0f;
+            for (auto& effect : data.spell->effects) {
+                if (effect) {
+                    bool hostile = effect->IsHostile();
+                    bool restoration = effect->baseEffect->GetMagickSkill() == RE::ActorValue::kRestoration;
+                    bool illusion = effect->baseEffect->GetMagickSkill() == RE::ActorValue::kIllusion;
+
+                    auto effectArchetype = effect->baseEffect->GetArchetype();
+                    bool archetype = effectArchetype == RE::EffectArchetypes::ArchetypeID::kValueModifier ||
+                                     effectArchetype == RE::EffectArchetypes::ArchetypeID::kDualValueModifier;
+                    RE::TESObjectREFR* shooter = data.shooter.get().get();
+                    RE::TESObjectREFR* target = data.desiredTarget.get().get();
+                    bool conditionsTrue = effect->conditions.IsTrue(shooter, target) &&
+                                          effect->baseEffect->conditions.IsTrue(shooter, target);
+                    if (hostile && !restoration && !illusion && archetype && conditionsTrue) {
+                        spellDamage += effect->GetMagnitude();
+                    }
+                }
+            }
+            ret = spellDamage;
+        }
+        return ret;
     }
 }

@@ -15,6 +15,11 @@ HazardUpdater::HazardUpdater() : running_(false) {
         Wildfire_BigHazard = tempBig->As<RE::BGSHazard>();
         Wildfire_MediumHazard = tempMedium->As<RE::BGSHazard>();
         Wildfire_SmallHazard = tempSmall->As<RE::BGSHazard>();
+
+        auto* set = Settings::GetSingleton();
+        SetHazardsPCOnly(set->HazardAffectPCOnly);
+        SetHazardsLifetine(set->HazardPeriodicUpdateTime*1.1f);
+
         logger::info("Hazard forms found and loaded.");
     } else {
         logger::error("Hazard forms not found. Please make sure Wildfire.esp is active");
@@ -145,55 +150,52 @@ HazardUpdater::ResultType HazardUpdater::HazardUpdateLogic(const CellStateMapTyp
 
         float burnProgress = std::clamp(1.0f - (state.fuel / std::max(0.001f, state.initialFuel)), 0.0f, 1.0f);
 
-        float minZ = std::numeric_limits<float>::max();
-        float maxZ = std::numeric_limits<float>::lowest();
+        auto& bounds = state.BBox;
 
-        float minX = std::numeric_limits<float>::max();
-        float maxX = std::numeric_limits<float>::lowest();
+        float dx = (bounds[1] - bounds[0]).Length();
+        float dy = (bounds[3] - bounds[0]).Length();
+        float dz = (bounds[4] - bounds[0]).Length();
 
-        float minY = std::numeric_limits<float>::max();
-        float maxY = std::numeric_limits<float>::lowest();
+        std::array<float, 3> dims{dx, dy, dz};
+        std::sort(dims.begin(), dims.end());
 
-        for (const auto& v : state.BBox) {
-            minX = std::min(minX, v.x);
-            maxX = std::max(maxX, v.x);
+        float minDim = dims[0];
+        float medDim = dims[1];
+        float maxDim = dims[2];
 
-            minY = std::min(minY, v.y);
-            maxY = std::max(maxY, v.y);
+        RE::NiPoint3 center{0, 0, 0};
+        for (const auto& p : bounds) center = center + p;
+        center *= (1.0f / 8.0f);
 
-            minZ = std::min(minZ, v.z);
-            maxZ = std::max(maxZ, v.z);
-        }
+        RE::NiPoint3 dir;
 
-        float height = maxZ - minZ;
-        float sizeX = maxX - minX;
-        float sizeY = maxY - minY;
-        float maxSize = std::max({sizeX, sizeY, height});
+        if (maxDim == dx)
+            dir = bounds[1] - bounds[0];
+        else if (maxDim == dy)
+            dir = bounds[3] - bounds[0];
+        else
+            dir = bounds[4] - bounds[0];
 
-        float zOffset = height * 0.5f * burnProgress;
+        float len = dir.Length();
+        if (len > 0.0f) dir *= (1.0f / len);
 
-        RE::NiPoint3 pos = state.position;
-        pos.z += zOffset;
+        // bottom of trunk
+        RE::NiPoint3 bottom = center - dir * (maxDim * 0.5f);
 
         HazardType hazardType = HazardType::SmallFireHazard;
 
-        if (maxSize * burnProgress > 600.0f) {
+        if (maxDim * burnProgress > 800.0f)
             hazardType = HazardType::LargeFireHazard;
-        } else if (maxSize * burnProgress > 300.0f) {
+        else if (maxDim * burnProgress > 400.0f)
             hazardType = HazardType::BigFireHazard;
-        } else if (maxSize * burnProgress > 120.0f) {
+        else if (maxDim * burnProgress > 150.0f)
             hazardType = HazardType::MediumFireHazard;
-        }
 
-        spawnHazards.push_back(SpawnHazardData{pos, hazardType});
+        // bottom -> 75% height
+        RE::NiPoint3 pos = bottom + dir * (maxDim * 0.75f * burnProgress);
+        spawnHazards.push_back({pos, hazardType});
 
-        if (burnProgress > 0.5f) {
-            RE::NiPoint3 bottomFirePos = state.position;
-            bottomFirePos.z += height * 0.15f;
-
-            spawnHazards.push_back(SpawnHazardData{bottomFirePos, hazardType});
-        }
-   }
+    }
 
 
     int minX, minY, width, height;
@@ -352,6 +354,9 @@ HazardUpdater::ResultType HazardUpdater::HazardUpdateLogic(const CellStateMapTyp
 void HazardUpdater::SpawnHazards() {
     auto start = std::chrono::high_resolution_clock::now();
 
+    static auto* set = Settings::GetSingleton();
+    static auto* DebugAPI = DebugAPI_IMPL::DebugAPI::GetSingleton();
+
     ResultType hazardsCopy;
 
     {
@@ -363,7 +368,6 @@ void HazardUpdater::SpawnHazards() {
         return;
     }
 
-    auto* set = Settings::GetSingleton();
     int maxSpawn = set->MaxHazardSpawn;
 
     std::vector<SpawnHazardData> large_hazards, big_hazards, medium_hazards, small_hazards;
@@ -378,6 +382,22 @@ void HazardUpdater::SpawnHazards() {
             big_hazards.push_back(h);
         else 
             large_hazards.push_back(h);
+
+        if (set->DebugMode && set->DrawHazards) {
+
+            RE::NiColorA colour{1, 0, 0, 1};
+
+            if (h.position.z == 0.0f) {
+                float z = 0.0f;
+                RE::TES::GetSingleton()->GetLandHeight(h.position, z);  // Get the terrain height at the position
+                h.position.z = z;
+            }
+            auto p0 = h.position;
+            auto p1 = p0;
+            p1.z += h.size * 10;
+
+            DebugAPI->DrawLineForMS(p0, p1, set->DebugDrawDuration, colour, h.size);
+        }
     }
     
     // Shuffle each group
@@ -429,6 +449,28 @@ void HazardUpdater::SpawnHazards() {
     logger::debug("Spawned {}/{} hazards in {} ms", spawned, hazardsCopy.size(), elapsed.count());
 }
 
+void HazardUpdater::SetHazardsPCOnly(bool PCOnly) {
+    if (PCOnly) {
+        Wildfire_LargeHazard->data.flags.set(RE::BGSHazardData::BGSHazardFlags::kPCOnly);
+        Wildfire_BigHazard->data.flags.set(RE::BGSHazardData::BGSHazardFlags::kPCOnly);
+        Wildfire_MediumHazard->data.flags.set(RE::BGSHazardData::BGSHazardFlags::kPCOnly);
+        Wildfire_SmallHazard->data.flags.set(RE::BGSHazardData::BGSHazardFlags::kPCOnly);
+    } else {
+        Wildfire_LargeHazard->data.flags.reset(RE::BGSHazardData::BGSHazardFlags::kPCOnly);
+        Wildfire_BigHazard->data.flags.reset(RE::BGSHazardData::BGSHazardFlags::kPCOnly);
+        Wildfire_MediumHazard->data.flags.reset(RE::BGSHazardData::BGSHazardFlags::kPCOnly);
+        Wildfire_SmallHazard->data.flags.reset(RE::BGSHazardData::BGSHazardFlags::kPCOnly);    
+    }
+}
+
+
+void HazardUpdater::SetHazardsLifetine(float lifetime) {
+    Wildfire_LargeHazard->data.lifetime = lifetime;
+    Wildfire_BigHazard->data.lifetime = lifetime;
+    Wildfire_MediumHazard->data.lifetime = lifetime;
+    Wildfire_SmallHazard->data.lifetime = lifetime;
+}
+
 static float RandomFloat(float min, float max) {
     static thread_local std::mt19937 rng{std::random_device{}()};
     std::uniform_real_distribution<float> dist(min, max);
@@ -436,6 +478,9 @@ static float RandomFloat(float min, float max) {
 }
 
 void HazardUpdater::SpawnHazard(const RE::NiPoint3& pos, HazardType size, bool jitter) {
+    static auto* player = RE::PlayerCharacter::GetSingleton();
+    static auto* tes = RE::TES::GetSingleton();
+
     RE::BGSHazard* hazardToSpawn = nullptr;
     float scale = 1.0f;
     switch (size) {
@@ -477,11 +522,18 @@ void HazardUpdater::SpawnHazard(const RE::NiPoint3& pos, HazardType size, bool j
     }
     if (spawnPos.z == 0.0f) {
         float z = 0.0f;
-        RE::TES::GetSingleton()->GetLandHeight(spawnPos, z);  // Get the terrain height at the position
+        tes->GetLandHeight(spawnPos, z);  // Get the terrain height at the position
         spawnPos.z = z + 20.0f;
     }
 
-    auto player = RE::PlayerCharacter::GetSingleton();
+    auto cell = tes->GetCell(spawnPos);
+    if (cell) {
+        auto waterHeight = tes->GetWaterHeight(spawnPos, cell);
+        if (spawnPos.z < waterHeight) {
+            spawnPos.z = waterHeight + 20.0f;
+        }
+    }
+
     auto hazardRef = player->PlaceObjectAtMe(hazardToSpawn, false);
     if (!hazardRef) {
         logger::error("Failed to place hazard");
@@ -492,7 +544,6 @@ void HazardUpdater::SpawnHazard(const RE::NiPoint3& pos, HazardType size, bool j
     // Random rotation around Z-axis (yaw) to add visual variety
     float yaw = RandomFloat(0.0f, 360.0f);
     hazardRef->data.angle = RE::NiPoint3{yaw, 0.0f, 0.0f};
-
     
     hazardRef->GetReferenceRuntimeData().refScale = static_cast<std::uint16_t>(scale * 100.0f);
 }

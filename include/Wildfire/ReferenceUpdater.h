@@ -16,17 +16,17 @@ public:
     void ClearResult();
 
     // Not safe to use in thread
-    RefState* GetOrCreateRefState(RefStateMapType& burningRefs, RE::TESObjectREFR* ref);
+    RefState* GetOrCreateRefState(RefStateMapType& burningRefs, RE::ObjectRefHandle refHandle);
 
     // Safe to use in thread
-    RefState* GetRefState(RefStateMapType& burningRefs, RE::TESObjectREFR* ref);
+    RefState* GetRefState(RefStateMapType& burningRefs, RE::ObjectRefHandle refHandle);
 
-    //void ApplyFX(RefStateMapType& burningRefs, float delta);
     void ApplyCharredFX(RE::TESObjectREFR* ref);
-    void ApplyBurningFX(RE::TESObjectREFR* ref); 
-    void ApplyFrostFX(RE::TESObjectREFR* ref); 
+    void ApplyBurningFX(RE::TESObjectREFR* ref);
+    void ApplyFrostFX(RE::TESObjectREFR* ref);
     void RemoveFX(RE::TESObjectREFR* ref);
     void RemoveLeaves(RE::TESObjectREFR* ref);
+    void RemoveLeavesSmooth(RE::TESObjectREFR* ref, float progress);
 
 private:
     RefStateMapType ReferenceUpdateLogic(RefEventType refEvents, RefStateMapType burningRefs, WeatherData wheatherData,
@@ -42,5 +42,5 @@ private:
     std::optional<RefStateMapType> result_;
 
     std::shared_mutex createRefStateMutex;
-    std::queue<RE::TESObjectREFR*> createRefStateQueue;
+    std::queue<RE::ObjectRefHandle> createRefStateQueue;
 };

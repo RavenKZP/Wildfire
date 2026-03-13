@@ -1,6 +1,7 @@
 #include "logger.h"
 
 #include "Wildfire/Wildfire.h"
+#include "Events.h"
 #include "MCP.h"
 #include "Hooks.h"
 #include "Settings.h"
@@ -8,6 +9,7 @@
 void OnMessage(SKSE::MessagingInterface::Message* message) {
     if (message->type == SKSE::MessagingInterface::kDataLoaded) {
         Hooks::InstallHooks();
+        //Events::RegisterForEvents(); //Used just for testing
         MCP::Register();
         WildfireMgr::GetSingleton();  // Init
         Settings::GetSingleton();     // Init

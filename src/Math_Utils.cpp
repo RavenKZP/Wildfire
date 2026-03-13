@@ -127,6 +127,9 @@ namespace Math {
 
     void EachGeometry(const RE::TESObjectREFR* obj,
                       const std::function<void(RE::BSGeometry* o3d, RE::BSGraphics::TriShape*)>& callback) {
+        if (!obj) {
+            return;
+        }
         if (const auto d3d = obj->Get3D()) {
             RE::BSVisit::TraverseScenegraphGeometries(d3d,
                                                       [&](RE::BSGeometry* a_geometry) -> RE::BSVisit::BSVisitControl {

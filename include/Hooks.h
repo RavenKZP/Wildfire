@@ -53,7 +53,19 @@ namespace Hooks {
         static inline REL::Relocation<decltype(thunk)> originalFunction;
     };
 
+    struct ParticleHook { 
+        static bool thunk(RE::BSParticleShaderCubeEmitter* a_this, bool a_arg1, RE::NiPoint3& a_arg2,
+                          RE::NiPoint3& a_arg3);
+        static inline REL::Relocation<decltype(thunk)> originalFunction;
+    };
+
     inline void InstallHooks() {
+
+        /*
+        ParticleHook::originalFunction = 
+            REL::Relocation<std::uintptr_t>(RE::VTABLE_BSParticleShaderCubeEmitter[0])
+                                             .write_vfunc(0x03, ParticleHook::thunk);
+                                             */
 
         UpdateHook::Update_ =
             REL::Relocation<std::uintptr_t>(RE::VTABLE_PlayerCharacter[0]).write_vfunc(0xAD, UpdateHook::Update);

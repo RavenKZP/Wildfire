@@ -7,9 +7,9 @@ namespace MCP {
     void Register();
     void __stdcall RenderSettings();
 
-    void __stdcall RenderBurningGird();
-
     // For debug purposes
+    void __stdcall RenderBurningGird();
+    void __stdcall RenderBurningRefs();
     void __stdcall RenderDebugTools();
     void __stdcall RenderLog();
 

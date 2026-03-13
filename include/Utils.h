@@ -12,9 +12,13 @@ namespace Utils {
     BoundaryBox GetBoundingBox(const RE::TESObjectREFR* a_obj);
 
     bool IsSupportedForm(RE::TESObjectREFR* ref);
+    bool IsPapyrusSupported(RE::TESObjectREFR* ref);
+    bool IsOIFSupported(RE::TESObjectREFR* ref);
 
     std::string ToLower(std::string s);
 
-    ImpactType GetProjectileType(RE::Projectile* proj);
-    ImpactType GetExplosionType(RE::Explosion* exp);
+    ElementType GetProjectileType(RE::Projectile* proj);
+    ElementType GetExplosionType(RE::Explosion* exp);
+
+    float GetDamageFromProjectile(RE::Projectile* proj);
 }

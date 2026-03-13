@@ -6,6 +6,8 @@
 #include "Utils.h"
 
 #include "CLibUtilsQTR/Tasker.hpp"
+// To be removed in release builds
+#include "CLibUtilsQTR/DrawDebug.hpp"
 
 GrassUpdater::GrassUpdater() : running_(false) {}
 
@@ -25,25 +27,64 @@ void GrassUpdater::OnGameLoad() {
 bool GrassUpdater::StartUpdate(GrassEventType& events, CellStateMapType& cellStateMap, WeatherData& wheatherData,
                                float delta) {
 
+    static auto* set = Settings::GetSingleton();
+    static auto* DebugAPI = DebugAPI_IMPL::DebugAPI::GetSingleton();
+
     std::queue<RE::TESObjectCELL*> cellsToRemove;
     for (auto& [cell, state] : cellStateMap) {
         if (!cell || !cell->IsAttached()) {
             cellsToRemove.push(cell);
             continue;  // Skip unattached cells, they will be removed from the map
         }
+        if (!state.valid) {
+            cellsToRemove.push(cell);
+            continue;  // Skip invalid cells, they will be removed from the map
+        }
 
         bool alteredFound = false;
-        for (int q = 0; q < CELL_QUAD_COUNT && !alteredFound; ++q) {
-            for (int v = 0; v < VERTS_PER_QUAD && !alteredFound; ++v) {
+        for (int q = 0; q < CELL_QUAD_COUNT; ++q) {
+            for (int v = 0; v < VERTS_PER_QUAD; ++v) {
                 if (state.altered[q][v]) {
+                    state.altered[q][v] = false;
                     alteredFound = true;
                 }
-                state.altered[q][v] = false;
+
+                if (set->DebugMode && set->DrawLandscape && cell == RE::PlayerCharacter::GetSingleton()->GetParentCell()) {
+                    FireVertex fireVert{state.cellAsCoordinates, q, v};
+                    auto p0 = fireVert.worldsPos;
+                    auto p1 = p0;
+                    auto p2 = p0;
+                    auto p3 = p0;
+                    auto p4 = p0;
+                    p1.x += VERTS_STEP / 2;
+                    p2.y += VERTS_STEP / 2;
+                    p3.x -= VERTS_STEP / 2;
+                    p4.y -= VERTS_STEP / 2;
+
+                    RE::NiColorA colour{0.75f, 0.75f, 0.75f, 1};  // Gray
+
+                    if (state.isBurning[q][v])
+                        colour = {1, 0, 0, 1};
+                    else if (state.isCharred[q][v])
+                        colour = {0, 0, 0, 1};
+                    else if (state.isUnderwater[q][v])
+                        colour = {0, 0, 1, 1};
+                    else if (state.heat[q][v] > 0 && state.canBurn[q][v])
+                        colour = {1, 1, 0, 1};
+                    else if (state.heat[q][v] < 0 && state.canBurn[q][v])
+                        colour = {0, 1, 1, 1};
+                    else if (state.canBurn[q][v])
+                        colour = {0, 1, 0, 1};
+
+                    DebugAPI->DrawLineForMS(p1, p3, set->DebugDrawDuration, colour, 1);
+                    DebugAPI->DrawLineForMS(p2, p4, set->DebugDrawDuration, colour, 1);
+                }
             }
         }
         if (alteredFound) {
-            std::memcpy(cell->GetRuntimeData().cellLand->loadedData->colors, state.newColors, sizeof(state.newColors));
+            std::memcpy(cell->GetLandscape()->loadedData->colors, state.newColors, sizeof(state.newColors));
             std::unique_lock cellsLock(cellsToUpdateMutex);
+            logger::debug("Adding cell {:X} to update grass", cell->GetFormID());
             cellsToUpdate.insert(cell);
         }
     }
@@ -104,6 +145,9 @@ CellStateMapType GrassUpdater::GrassUpdateLogic(GrassEventType grassEvents, Cell
 
     // Step 1 : Process each fire event and update the corresponding vertices in the cellStateMap
     for (const auto& event : grassEvents) {
+        if (event.type == ElementType::Neutral) {
+            continue; // Shouldn't happen but to be sure :)
+        }
         auto position = event.pos;
         auto radius = event.radius;
         auto damage = event.damage;
@@ -135,10 +179,14 @@ CellStateMapType GrassUpdater::GrassUpdateLogic(GrassEventType grassEvents, Cell
                 }
                 float adjustedDamage = damage * (1.0f - (distance / radius));  // Scale damage by distance
 
-                cellState->heat[quad][vert] += adjustedDamage;  // Increase or decrease heat based on damage
-                cellState->altered[quad][vert] = true;
+                cellState->heat[quad][vert] = std::max(std::min(cellState->heat[quad][vert] + adjustedDamage, set->DefaultMaxGrassHeat), set->DefaultMinGrassHeat);  // Increase or decrease heat based on damage
+
+                if (adjustedDamage > 0.0f) {
+                    cellState->altered[quad][vert] = true;
+                }
                 if (cellState->canBurn[quad][vert] &&
-                    cellState->heat[quad][vert] >= cellState->minBurnHeat[quad][vert]) {
+                    cellState->heat[quad][vert] >= cellState->ignitionHeat[quad][vert] &&
+                    !cellState->isCharred[quad][vert]) {
                     cellState->isBurning[quad][vert] = true;
                 } else if (cellState->heat[quad][vert] <= 0.0f) {
                     cellState->isBurning[quad][vert] = false;
@@ -165,9 +213,13 @@ CellStateMapType GrassUpdater::GrassUpdateLogic(GrassEventType grassEvents, Cell
             if (cellState->isCharred[quad][vert] || cellState->isUnderwater[quad][vert]) {
                 continue;
             }
-            cellState->heat[quad][vert] += damage;  // Increase or decrease heat based on damage
-            cellState->altered[quad][vert] = true;
-            if (cellState->canBurn[quad][vert] && cellState->heat[quad][vert] >= cellState->minBurnHeat[quad][vert]) {
+            cellState->heat[quad][vert] = std::min(cellState->heat[quad][vert] + damage, set->DefaultMaxGrassHeat);
+
+            if (damage > 0.0f) {
+                cellState->altered[quad][vert] = true;
+            }
+            if (cellState->canBurn[quad][vert] && cellState->heat[quad][vert] >= cellState->ignitionHeat[quad][vert] &&
+                !cellState->isCharred[quad][vert]) {
                 cellState->isBurning[quad][vert] = true;
             }
             if (cellState->heat[quad][vert] <= 0) {
@@ -196,12 +248,17 @@ CellStateMapType GrassUpdater::GrassUpdateLogic(GrassEventType grassEvents, Cell
                     float heat = state.heat[q][v] - state.usedHeat[q][v];
                     TaskInterface->AddTask([cell, pos, heat]() {
                         if (cell) {
-                            cell->ForEachReferenceInRange(pos, VERTS_STEP, [pos, heat](RE::TESObjectREFR* ref) {
-                                if (ref && Utils::IsSupportedForm(ref)) {
-                                    auto refPos = ref->GetPosition();
-                                    auto distance = pos.GetDistance(refPos);
-                                    float adjusted_damage = heat * (distance / VERTS_STEP);
-                                    WildfireMgr::GetSingleton()->AddRefEvent(ref, adjusted_damage, ImpactType::Fire);
+                            cell->ForEachReferenceInRange(pos, VERTS_STEP * 2.0f, [pos, heat](RE::TESObjectREFR* ref) {
+                                if (ref) {
+                                    auto* wildfireMgr = WildfireMgr::GetSingleton();
+                                    if (Utils::IsSupportedForm(ref)) {
+                                        auto refPos = ref->GetPosition();
+                                        auto distance = pos.GetDistance(refPos);
+                                        float adjusted_damage = heat * (distance / VERTS_STEP * 2.0f);
+                                        wildfireMgr->AddRefEvent(ref, adjusted_damage,
+                                                                                 ElementType::Fire);
+                                    }
+                                    wildfireMgr->SendHitEvent(ref);
                                 }
                                 return RE::BSContainer::ForEachResult::kContinue;
                             });
@@ -211,14 +268,14 @@ CellStateMapType GrassUpdater::GrassUpdateLogic(GrassEventType grassEvents, Cell
                     auto neighbours = GetFireVertexNeighboursWeighted(targetVertex, wheatherData.windData);
 
                     for (const auto& neighbour : neighbours) {
-                        
-                        float heatToUse = state.heat[q][v] - state.usedHeat[q][v];
-                        if (heatToUse < 0.0f) heatToUse = 0.0f;
-                        float damage =
-                            (((heatToUse / set->HeatDistributionFactor) * delta) * (RainingFactor * SnowingFactor));
-                        state.usedHeat[q][v] += damage;
-
-                        if (damage > 0.0f) {
+                        float heatToUse = std::min(state.heat[q][v] - state.usedHeat[q][v], set->MaxHeatDistribution);
+                        float damage = 0.0f;
+                        if (heatToUse < 0.0f) {
+                            heatToUse = 0.0f;
+                        } else {
+                            damage =
+                                (((heatToUse / set->HeatDistributionFactor) * delta) * (RainingFactor * SnowingFactor));
+                            state.usedHeat[q][v] += damage;
                             int nq = neighbour.vertex.quadrant;
                             int nv = neighbour.vertex.vertex;
 
@@ -237,7 +294,7 @@ CellStateMapType GrassUpdater::GrassUpdateLogic(GrassEventType grassEvents, Cell
                                 neighbourCellState->heat[nq][nv] += damage * neighbour.weight;
                                 neighbourCellState->altered[nq][nv] = true;
                                 if (neighbourCellState->canBurn[nq][nv] &&
-                                    neighbourCellState->heat[nq][nv] >= neighbourCellState->minBurnHeat[nq][nv] &&
+                                    neighbourCellState->heat[nq][nv] >= neighbourCellState->ignitionHeat[nq][nv] &&
                                     !state.isCharred[nq][nv]) {
                                     neighbourCellState->isBurning[nq][nv] = true;
                                 }
@@ -245,7 +302,7 @@ CellStateMapType GrassUpdater::GrassUpdateLogic(GrassEventType grassEvents, Cell
                             } else {
                                 state.heat[nq][nv] += damage * neighbour.weight;
                                 state.altered[nq][nv] = true;
-                                if (state.canBurn[nq][nv] && state.heat[nq][nv] >= state.minBurnHeat[nq][nv] &&
+                                if (state.canBurn[nq][nv] && state.heat[nq][nv] >= state.ignitionHeat[nq][nv] &&
                                     !state.isCharred[nq][nv]) {
                                     state.isBurning[nq][nv] = true;
                                 }
@@ -256,7 +313,9 @@ CellStateMapType GrassUpdater::GrassUpdateLogic(GrassEventType grassEvents, Cell
                     // Decrease fuel amount
                     state.fuel[q][v] -= set->FuelConsumptionRate * delta;
                     // Heat increases as fuel burns
-                    state.heat[q][v] += set->FuelConsumptionRate * set->FuelToHeatRate * delta;
+                    state.heat[q][v] =
+                        std::min(state.heat[q][v] + (set->FuelConsumptionRate * set->FuelToHeatRate * delta),
+                                 set->DefaultMaxGrassHeat);
                     state.altered[q][v] = true;
 
                     // Mark as charred when burning stops
@@ -290,6 +349,9 @@ CellStateMapType GrassUpdater::GrassUpdateLogic(GrassEventType grassEvents, Cell
         for (int q = 0; q < CELL_QUAD_COUNT; ++q) {
             for (int v = 0; v < VERTS_PER_QUAD; ++v) {
                 if (state.altered[q][v]) {
+                    if (state.heat[q][v] < 0.0f) {
+                        continue;
+                    }
                     uint8_t minColor = set->MinGrassColorValue;
                     uint8_t colorValue = 255;
 
@@ -297,12 +359,12 @@ CellStateMapType GrassUpdater::GrassUpdateLogic(GrassEventType grassEvents, Cell
 
                     if (state.isBurning[q][v] || state.isCharred[q][v]) {
                         // Darken based on fuel amount (the less fuel, the darker)
-                        float fuelRatio = state.fuel[q][v] / set->DefaultInitialFuelAmount;
+                        float fuelRatio = state.fuel[q][v] / set->DefaultGrassFuel;
                         colorValue = static_cast<uint8_t>((255 * maxDarkenByHeat) -
                                                           ((255 * maxDarkenByHeat) * (1.0f - fuelRatio)));
                     } else {
                         // Darken based on heat (the more heat, the darker)
-                        float heatRatio = state.heat[q][v] / state.minBurnHeat[q][v];
+                        float heatRatio = state.heat[q][v] / state.ignitionHeat[q][v];
                         colorValue = static_cast<uint8_t>((255 * maxDarkenByHeat) +
                                                           ((255 * maxDarkenByHeat) * (1.0f - heatRatio)));
                     }
@@ -541,17 +603,14 @@ std::vector<WeightedNeighbour> GrassUpdater::GetFireVertexNeighboursWeighted(con
     };
 
     // Wind direction vector (assumed radians)
-    float angle = (static_cast<float>(windData.direction) / 255.0f) * 2.0f * M_PI;
-    float windDirX = std::cosf(angle);
-    float windDirY = std::sinf(angle);
+    float windDirX = std::cosf(windData.direction);
+    float windDirY = std::sinf(windData.direction);
 
     float windLen = std::sqrt(windDirX * windDirX + windDirY * windDirY);
     if (windLen > 0.0f) {
         windDirX /= windLen;
         windDirY /= windLen;
     }
-
-    float windSpeedNorm = static_cast<float>(windData.speed) * 1.0f / 255.0f;  // normalized 0..~1
 
     // For each neighbour, compute weight
     size_t count = std::min(neighbours.size(), dirVec.size());
@@ -569,7 +628,7 @@ std::vector<WeightedNeighbour> GrassUpdater::GetFireVertexNeighboursWeighted(con
 
         float dot = windDirX * neighDirX + windDirY * neighDirY;
         float windBoost =
-            dot * windSpeedNorm * Settings::GetSingleton()->WindSpeedFactor;  // alignment * speed * factor
+            dot * windData.speed * Settings::GetSingleton()->WindSpeedFactor;  // alignment * speed * factor
         float finalWeight = baseWeights[i] * (1.0f + windBoost);
 
         result.push_back(WeightedNeighbour{neigh, finalWeight});
@@ -597,8 +656,10 @@ void GrassUpdater::RegenerateGrass() {
     std::unique_lock lock(cellsToUpdateMutex);
 
     if (!cellsToUpdate.empty()) {  // One cell per frame
+        logger::debug("cells To Update {} ", cellsToUpdate.size());
         auto it = cellsToUpdate.begin();
         RE::TESObjectCELL* cellToApply = *it;
+        logger::debug("Regenerate Grass In Cell {:X} ", cellToApply->GetFormID());
         cellsToUpdate.erase(it);
         lock.unlock();
 
@@ -620,5 +681,6 @@ void GrassUpdater::RegenerateGrassInCell(RE::TESObjectCELL* cell) {
         grassMgr->CreateGrassInCell(cell, &flag);  // flag is something like cancel flag if true no grass is generated
         grassMgr->ExecuteAllGrassTasks(cell, 0);   // actually apply grass to scene?
                                                    // 2'nd argument is just set to 1 internally (no matter what we pass)
+        cell->GetRuntimeData().cellLand->SetAltered(true);
     }
 }
