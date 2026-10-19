@@ -42,8 +42,13 @@ CellState::CellState(RE::TESObjectCELL* cell) {
     std::memset(canBurn, false, sizeof(canBurn));
     std::memset(ignitionHeat, 0, sizeof(ignitionHeat));
     std::memset(fuel, 0, sizeof(fuel));
+
     std::memset(originalColors, 0, sizeof(originalColors));
     std::memset(newColors, 0, sizeof(newColors));
+
+    std::memset(originalHeights, 0, sizeof(originalHeights));
+    std::memset(newHeights, 0, sizeof(newHeights));
+    
     std::memset(heat, 0, sizeof(heat));
     std::memset(usedHeat, 0, sizeof(usedHeat));
     std::memset(isBurning, false, sizeof(isBurning));
@@ -60,21 +65,26 @@ CellState::CellState(RE::TESObjectCELL* cell) {
     if (coord) {
         cellAsCoordinates = CellAsCoords{coord->cellX, coord->cellY};
     } else {
-        logger::error("CellState initialized with interior cell");
+        logger::warn("CellState initialized with interior cell");
     }
 
     auto cellLand = cell->GetLandscape();
     if (!cellLand) {
-        logger::error("CellState ({}, {}) initialized with cell that has no cellLand data", cellAsCoordinates.cellX,
+        logger::warn("CellState ({}, {}) initialized with cell that has no cellLand data", cellAsCoordinates.cellX,
                       cellAsCoordinates.cellY);
         return;
     }
 
     auto& loadedData = cellLand->loadedData;
     auto& colors = cellLand->loadedData->colors;
+    auto& heights = cellLand->loadedData->heights;
+    auto& percents = cellLand->loadedData->percents;
 
     std::memcpy(originalColors, colors, sizeof(colors));
     std::memcpy(newColors, colors, sizeof(colors));
+
+    std::memcpy(originalHeights, heights, sizeof(heights));
+    std::memcpy(newHeights, heights, sizeof(heights));
 
     for (int q = 0; q < CELL_QUAD_COUNT; ++q) {
         for (int v = 0; v < VERTS_PER_QUAD; ++v) {
@@ -88,15 +98,15 @@ CellState::CellState(RE::TESObjectCELL* cell) {
             if (vertPos.z < waterHeight) {
                 isUnderwater[q][v] = true;
                 canBurn[q][v] = false;
-                continue;  // Skip burnable checks for underwater vertices
+                continue;  // Skip checks for underwater vertices
             }
 
             float defaultTexturePercent = 1.0f;
 
-            for (int texIdx = 0; texIdx < 7; ++texIdx) {  // 6 quad textures + 1 default texture
+            for (int texIdx = 0; texIdx < TEXTURES_PER_QUAD+1; ++texIdx) {  // 6 quad textures + 1 default texture
                 // Check percent coverage
                 float percent = 0.0f;
-                if (texIdx < 6) {  // Quad texture
+                if (texIdx < TEXTURES_PER_QUAD) {  // Quad texture
                     percent = (static_cast<float>(loadedData->percents[q][v][texIdx])) / 255.0f;
                     defaultTexturePercent -= percent;
                 } else {  // Default texture
@@ -104,15 +114,10 @@ CellState::CellState(RE::TESObjectCELL* cell) {
                 }
                 if (percent > 0.0f) {
                     RE::TESLandTexture* tex = loadedData->defQuadTextures[q];
-                    if (texIdx < 6) {
+                    if (texIdx < TEXTURES_PER_QUAD) {
                         tex = loadedData->quadTextures[q][texIdx];
                     }
                     if (!tex) continue;
-
-                    // Check material type
-                    if (tex->materialType->materialID == RE::MATERIAL_ID::kGrass) {
-                        canBurnVal = true;
-                    }
 
                     // Check grass list
                     float totalFuel = 0.0f;
@@ -149,6 +154,11 @@ CellState::CellState(RE::TESObjectCELL* cell) {
                     if (grassCount > 0) {
                         fuelVal = totalFuel / grassCount;
                         ignitionHeatVal = totalIgnition / grassCount;
+                    } else {
+                        // Check material type
+                        if (tex->materialType->materialID == RE::MATERIAL_ID::kGrass) {
+                            canBurnVal = true;
+                        }
                     }
                 }
             }
@@ -182,6 +192,9 @@ RefState::RefState(RE::TESObjectREFR* ref) {
     isUnderwater = false;
     halfEvent = false;
 
+    type = RefType::Static;
+    baseObjectSwap = nullptr;
+
     if (!ref) {
         return;
     }
@@ -191,13 +204,14 @@ RefState::RefState(RE::TESObjectREFR* ref) {
         return;
     }
 
-    auto formID = base->GetFormID();
+    auto baseFormID = base->GetFormID();
+    auto refFormID = ref->GetFormID();
 
     // -------------------------
     // 1. Excluded Trees Check
     // -------------------------
     if (base->Is(RE::FormType::Tree)) {
-        if (set->excludedTrees.contains(formID)) {
+        if (set->excludedTrees.contains(baseFormID) || set->excludedTrees.contains(refFormID)) {
             return;
         }
         canBurn = true;
@@ -206,13 +220,39 @@ RefState::RefState(RE::TESObjectREFR* ref) {
     // -------------------------
     // 2. Config Overrides
     // -------------------------
-    if (auto it = set->refsConfig.find(formID); it != set->refsConfig.end()) {
+    if (auto it = set->refsConfig.find(refFormID); it != set->refsConfig.end()) {
         const auto& cfg = it->second;
 
         canBurn = cfg.canBurn;
         fuel = cfg.fuel;
         initialFuel = fuel;
         ignitionHeat = cfg.ignitionHeat;
+
+        type = cfg.type;
+        baseObjectSwap = cfg.baseObjectSwap;
+    } else if (auto it = set->refsConfig.find(baseFormID); it != set->refsConfig.end()) {
+        const auto& cfg = it->second;
+
+        canBurn = cfg.canBurn;
+        fuel = cfg.fuel;
+        initialFuel = fuel;
+        ignitionHeat = cfg.ignitionHeat;
+
+        type = cfg.type;
+        baseObjectSwap = cfg.baseObjectSwap;
+    } else if (canBurn) {
+        // Default detection based on geometry
+        type = Utils::GetGeometryType(ref);
+    }
+
+    if (!canBurn) {
+        // No need to calculate other data if it can't burn
+        if (set->EnableTimeLogging) {
+            auto end = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<double, std::milli> elapsed = end - start;
+            logger::info("Initialized RefState {:X} | burn:{} in {} ms", ref->GetFormID(), canBurn, elapsed.count());
+            return;
+        }
     }
 
     // -------------------------
@@ -243,15 +283,14 @@ RefState::RefState(RE::TESObjectREFR* ref) {
 
         float ratio = aboveWaterHeight / totalHeight;
 
-        constexpr float burnThreshold = 0.30f;
-
-        if (ratio < burnThreshold) {
+        if (ratio <= set->UnderwaterRatio) {
             isUnderwater = true;
         }
     }
-
-    auto end = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double, std::milli> elapsed = end - start;
-    logger::debug("Initialized RefState {:X} | burn:{} fuel:{} underwater:{} in {} ms", ref->GetFormID(), canBurn, fuel,
-                  isUnderwater, elapsed.count());
+    if (set->EnableTimeLogging) {
+        auto end = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double, std::milli> elapsed = end - start;
+        logger::info("Initialized RefState {:X} | burn:{} fuel:{} underwater:{} in {} ms", ref->GetFormID(), canBurn,
+                      fuel, isUnderwater, elapsed.count());
+    }
 }

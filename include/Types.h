@@ -9,12 +9,17 @@
 #define CELL_SIZE 4096  // world units
 #define QUAD_SIZE 2048  // world units
 #define RGB_CHANNELS 3 // Red, Green, Blue
+#define TEXTURES_PER_QUAD 6 // Vanilla limitation, quad can have up to 6 textures at once
 
 #define M_PI 3.14159265358979323846f
+
+#include <array>
+#include <cstring>
 
 using BoundaryBox = std::array<RE::NiPoint3, 8>;
 
 enum ElementType {
+    Unknown = -1,
     Neutral = 0,
     Fire,
     Shock,
@@ -23,10 +28,13 @@ enum ElementType {
 };
 
 enum RefType {
-    Tree,            // Remove leafs and branches, but keep trunk. Applay Charred FX
-    Bush,            // Remove all? Replace with charred version?
-    BurnableSolid,   // Like barrels, crates, etc. Apply charred FX but don't change model
-    UnBurnableSolid  // Like rocks, buildings, etc.
+    Static,                  // Default behavior. Apply Charred FX
+    Tree,                    // Remove leafs and branches, but keep trunk. Applay Charred FX, remove wind animation
+    Bush,                    // Replace with predefined base object
+    Melt,                    // Snow or Ice, clothing. Applay melting Transform
+    Disintegrate,            // Banners, clothing, Ivy, moss. Applay disintegrate FX
+    FloraCoveredUnburnable,  // Ivy covered Stones, remove leafs and branches (like Trees), but don't apply Charred FX
+    BaseObjSwap,             // Replace with configured base object
 };
 
 enum HazardType {
@@ -53,12 +61,16 @@ struct GrassConfig {
     bool canBurn;
     float fuel;
     float ignitionHeat;
+    std::string EditorID;
 };
 
 struct RefConfig {
     bool canBurn;
     float fuel;
     float ignitionHeat;
+    RefType type;
+    RE::TESBoundObject* baseObjectSwap = nullptr;
+    std::string EditorID;
 };
 
 struct WindData {
@@ -81,12 +93,17 @@ struct CellAsCoords {
 struct CellState {
     bool valid;
     CellAsCoords cellAsCoordinates;                                         // Cell coordinates (cellX, cellY)
+
     uint8_t originalColors[CELL_QUAD_COUNT][VERTS_PER_QUAD][RGB_CHANNELS];  // Original colors for each vertex
     uint8_t newColors[CELL_QUAD_COUNT][VERTS_PER_QUAD][RGB_CHANNELS];
+    float originalHeights[CELL_QUAD_COUNT][VERTS_PER_QUAD];                 // store original heights (copied once)
+    float newHeights[CELL_QUAD_COUNT][VERTS_PER_QUAD];                         // current heights (modified by burn)
+
     float heat[CELL_QUAD_COUNT][VERTS_PER_QUAD];
     float usedHeat[CELL_QUAD_COUNT][VERTS_PER_QUAD];
     float ignitionHeat[CELL_QUAD_COUNT][VERTS_PER_QUAD];
     float fuel[CELL_QUAD_COUNT][VERTS_PER_QUAD];
+
     // ToDo: Make them Flags to take less space
     bool canBurn[CELL_QUAD_COUNT][VERTS_PER_QUAD];
     bool isBurning[CELL_QUAD_COUNT][VERTS_PER_QUAD];
@@ -117,6 +134,9 @@ struct RefState {
     bool isFrozen;  // Let ig GO, Let it GOOOOOOOOO
     bool halfEvent;
 
+    RefType type;
+    RE::TESBoundObject* baseObjectSwap;
+
     RefState(RE::TESObjectREFR* ref);
 };
 
@@ -138,6 +158,8 @@ struct WeightedNeighbour {
 struct SpawnHazardData {
     RE::NiPoint3 position;
     HazardType size;  // 1=small_hazards, 2=medium, 3=large
+    RE::ObjectRefHandle refHandle;  // Optional ref to be attached to
+    bool highObject{false};
 };
 
 struct ObjectRefHandleHash {
@@ -150,6 +172,12 @@ struct ObjectRefHandleEqual {
     bool operator()(const RE::ObjectRefHandle& a, const RE::ObjectRefHandle& b) const noexcept {
         return a.native_handle() == b.native_handle();
     }
+};
+
+struct TransformingData {
+    RE::ObjectRefHandle refHandle;
+    float Progress = 1.0f; // Going down to 0.0f
+    RE::TESBoundObject* baseObjectSwap{nullptr};
 };
 
 using GrassEventType = std::vector<GrassEvent>;
