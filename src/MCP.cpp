@@ -1,11 +1,14 @@
 #include "MCP.h"
 
 #include "SKSEMCP/SKSEMenuFramework.hpp"
+#include "ClibUtil/editorID.hpp"
 
 #include "Settings.h"
 #include "Utils.h"
 #include "Wildfire/Wildfire.h"
 #include "Wildfire/Weather.h"
+
+#include "Wildfire/DecalUpdater.h"
 
 namespace MCP {
 
@@ -16,12 +19,15 @@ namespace MCP {
         }
         SKSEMenuFramework::SetSection("Wildfire");
         SKSEMenuFramework::AddSectionItem("Settings", RenderSettings);
+        SKSEMenuFramework::AddSectionItem("Config Creator", RenderConfigCreator);
+        //SKSEMenuFramework::AddSectionItem("Config Editor", RenderConfigEditor);
 
 
 #ifndef NDEBUG
         SKSEMenuFramework::AddSectionItem("Burning Cells Gird", RenderBurningGird);
         SKSEMenuFramework::AddSectionItem("Burning Refs", RenderBurningRefs);
         SKSEMenuFramework::AddSectionItem("Debug Options", RenderDebugTools);
+        SKSEMenuFramework::AddSectionItem("Cell Grass", RenderCellGrass);
         SKSEMenuFramework::AddSectionItem("Log", RenderLog);
 #endif
 
@@ -30,7 +36,200 @@ namespace MCP {
 
     static void HelpMarker(const char* desc) {
         ImGuiMCP::TextDisabled("(?)");
-        if (ImGuiMCP::IsItemHovered()) ImGuiMCP::SetTooltip("%s", desc);
+        if (ImGuiMCP::IsItemHovered()) {
+            ImGuiMCP::SetTooltip("%s", desc);
+        }
+    }
+
+    // Recursive ImGui node inspector
+    static void DrawModelInspector(RE::NiAVObject* obj) {
+        if (!obj) return;
+
+        // Unique tree node ID per NiObject pointer
+        ImGuiMCP::PushID(obj);
+
+        // Collapsible header for this node
+        bool open = ImGuiMCP::TreeNodeEx(obj->name.c_str(), ImGuiMCP::ImGuiTreeNodeFlags_DefaultOpen);
+        if (open) {
+            // --- Common info ---
+            ImGuiMCP::TextDisabled("Type: %s", obj->GetRTTI()->GetName());
+            ImGuiMCP::Separator();
+
+            RE::NiUpdateData updData;
+            updData.flags = RE::NiUpdateData::Flag::kNone;
+            updData.time = 0.0f;
+            if (ImGuiMCP::Button("UpdateTransformAndBounds")) {
+                obj->UpdateTransformAndBounds(updData);
+            }
+
+            // --- Geometry controls ---
+            if (auto triShape = obj->AsTriShape()) {
+                bool isCulled = triShape->GetFlags().any(RE::NiAVObject::Flag::kHidden);
+
+                if (ImGuiMCP::Checkbox("Culled (Hidden)", &isCulled)) {
+                    triShape->CullGeometry(isCulled);
+                }
+            }
+
+            // --- Children ---
+            if (auto node = obj->AsNode()) {
+                for (auto& child : node->GetChildren()) {
+                    if (child) {
+                        DrawModelInspector(child.get());
+                    }
+                }
+            }
+
+            ImGuiMCP::TreePop();
+        }
+
+        ImGuiMCP::PopID();
+    }
+
+    void __stdcall RenderConfigCreator() {
+        static const char* RefTypeNames[] = {
+            "Static", "Tree", "Bush", "Melt", "Disintegrate", "FloraCoveredUnburnable", "BaseObjSwap"};
+
+        if (auto refPtr = RE::Console::GetSelectedRef()) {
+            auto* ref = refPtr.get();
+            static RE::FormID lastRef = 0;
+            auto base = ref->GetBaseObject();
+            auto* set = Settings::GetSingleton();
+            ImGuiMCP::Text("Selected Ref: %s (FormID: %08X)", ref->GetDisplayFullName(), ref->GetFormID());
+
+            std::string editorID = clib_util::editorID::get_editorID(base);
+            if (editorID.empty()) {
+                editorID = base->GetFormEditorID();
+            }
+            ImGuiMCP::Text("EditorID: %s", editorID.c_str());
+
+            /*
+            if (base->Is(RE::FormType::Tree)) {
+                if (set->excludedTrees.contains(base->GetFormID())) {
+                    if (ImGuiMCP::Button("Remove Base from excluded trees")) {
+                        set->excludedTrees.erase(base->GetFormID());
+                    }
+                } else {
+                    if (ImGuiMCP::Button("Add Base to excluded trees")) {
+                        set->excludedTrees.insert(base->GetFormID());
+                    }
+                }
+                if (set->excludedTrees.contains(ref->GetFormID())) {
+                    if (ImGuiMCP::Button("Remove Ref from excluded trees")) {
+                        set->excludedTrees.erase(ref->GetFormID());
+                    }
+                } else {
+                    if (ImGuiMCP::Button("Add Ref to excluded trees")) {
+                        set->excludedTrees.insert(ref->GetFormID());
+                    }
+                }
+            }
+            */
+
+            auto it = set->refsConfig.find(ref->GetFormID());
+            if (it == set->refsConfig.end()) {
+                it = set->refsConfig.find(base->GetFormID());
+            }
+            if (it != set->refsConfig.end()) {
+                static RefConfig config{};
+                if (lastRef != ref->GetFormID()) {
+                    lastRef = ref->GetFormID();
+                    config = it->second;
+                }
+
+                ImGuiMCP::Checkbox("Can Burn", &config.canBurn);
+                ImGuiMCP::SliderFloat("Ignition Heat", &config.ignitionHeat, 0.0f, 100.0f, "%.1f");
+                ImGuiMCP::SameLine();
+                ImGuiMCP::InputFloat("##IgnitionHeat", &config.ignitionHeat);
+                ImGuiMCP::SliderFloat("Fuel", &config.fuel, 0.0f, 200.0f, "%.1f");
+                ImGuiMCP::SameLine();
+                ImGuiMCP::InputFloat("##Fuel", &config.fuel);
+
+                int current = static_cast<int>(config.type);
+
+                if (ImGuiMCP::Combo("Ref Type", &current, RefTypeNames, 7)) {
+                    config.type = static_cast<RefType>(current);
+                }
+
+                ImGuiMCP::SameLine();
+                if (ImGuiMCP::Button("Remove FX")) {
+                    static ReferenceUpdater refUpdMCP;
+                    refUpdMCP.RemoveFX(ref);
+                    ref->Get3D()->CullGeometry(false);
+                }
+
+                if (ImGuiMCP::Button("Delete Config for this Ref Base")) {
+                    set->customRefsConfig.erase(it->first);
+                    set->refsConfig.erase(it->first);
+                    set->SaveCustomRefConfigs(set->refsConfig);
+                }
+                ImGuiMCP::SameLine();
+                if (ImGuiMCP::Button("Update Config for this Ref Base")) {
+                    set->refsConfig[it->first] = config;
+                    set->customRefsConfig.insert(it->first);
+                    set->SaveCustomRefConfigs(set->refsConfig);
+                }
+            } else {
+                static RefConfig newConfig;
+                if (lastRef != ref->GetFormID()) {
+                    lastRef = ref->GetFormID();
+                    newConfig = RefConfig();
+                }
+
+                ImGuiMCP::Checkbox("Can Burn", &newConfig.canBurn);
+                ImGuiMCP::SliderFloat("Ignition Heat", &newConfig.ignitionHeat, 0.0f, 100.0f, "%.1f");
+                ImGuiMCP::SameLine();
+                ImGuiMCP::InputFloat("##IgnitionHeat", &newConfig.ignitionHeat);
+                ImGuiMCP::SliderFloat("Fuel", &newConfig.fuel, 0.0f, 200.0f, "%.1f");
+                ImGuiMCP::SameLine();
+                ImGuiMCP::InputFloat("##Fuel", &newConfig.fuel);
+
+                int current = static_cast<int>(newConfig.type);
+                if (ImGuiMCP::Combo("Ref Type", &current, RefTypeNames, 7)) {
+                    newConfig.type = static_cast<RefType>(current);
+                }
+
+                ImGuiMCP::SameLine();
+                if (ImGuiMCP::Button("Remove FX")) {
+                    static ReferenceUpdater refUpdMCP;
+                    refUpdMCP.RemoveFX(ref);
+                    ref->Get3D()->CullGeometry(false);
+                }
+
+                if (ImGuiMCP::Button("Create Config for this Ref")) {
+                    set->refsConfig[ref->GetFormID()] = newConfig;
+                    set->customRefsConfig.insert(ref->GetFormID());
+                    set->SaveCustomRefConfigs(set->refsConfig);
+                }
+                ImGuiMCP::SameLine();
+                if (ImGuiMCP::Button("Create Config for this Base")) {
+                    set->refsConfig[base->GetFormID()] = newConfig;
+                    set->customRefsConfig.insert(base->GetFormID());
+                    set->SaveCustomRefConfigs(set->refsConfig);
+                }
+            }
+        }
+    }
+    
+    void __stdcall RenderConfigEditor() {
+        auto* set = Settings::GetSingleton();
+        ImGuiMCP::Text("Grass Configs");
+        for (auto& [formID, config] : set->grassConfig) {
+            ImGuiMCP::Text("FormID: %08X EditorID: %s", formID, config.EditorID);
+            ImGuiMCP::Checkbox(("Can Burn##" + std::to_string(formID)).c_str(), &config.canBurn);
+            ImGuiMCP::InputFloat(("Ignition Heat##" + std::to_string(formID)).c_str(), &config.ignitionHeat);
+            ImGuiMCP::InputFloat(("Fuel##" + std::to_string(formID)).c_str(), &config.fuel);
+        }
+
+        ImGuiMCP::Text("Objects Configs");
+        for (auto& [formID, config] : set->refsConfig) {
+            ImGuiMCP::Text("FormID: %08X EditorID: %s", formID, config.EditorID);
+            ImGuiMCP::Checkbox(("Can Burn##" + std::to_string(formID)).c_str(), &config.canBurn);
+            ImGuiMCP::InputFloat(("Ignition Heat##" + std::to_string(formID)).c_str(), &config.ignitionHeat);
+            ImGuiMCP::InputFloat(("Fuel##" + std::to_string(formID)).c_str(), &config.fuel);
+        }
+
+
     }
 
     void __stdcall RenderSettings() {
@@ -43,6 +242,10 @@ namespace MCP {
             ImGuiMCP::Checkbox("Mod Active", &set->ModActive);
             ImGuiMCP::SameLine();
             HelpMarker("Master kill switch for the wildfire system.");
+
+            ImGuiMCP::Checkbox("Enable Time Logging", &set->EnableTimeLogging);
+            ImGuiMCP::SameLine();
+            HelpMarker("Enable Detailed logs about frame time consumed by mod.");
 
             ImGuiMCP::Checkbox("Debug Mode", &set->DebugMode);
             ImGuiMCP::SameLine();
@@ -65,10 +268,21 @@ namespace MCP {
             ImGuiMCP::SameLine();
             HelpMarker("Draws bounding boxes around simulated objects (trees, refs).");
             
-
             ImGuiMCP::Checkbox("Draw Hazards", &set->DrawHazards);
             ImGuiMCP::SameLine();
-            HelpMarker("Shows spawned fire hazards in the world.");
+            HelpMarker("Shows fire hazards positions.");
+
+            ImGuiMCP::Checkbox("Draw Hazards Movement", &set->DrawHazardsMovement);
+            ImGuiMCP::SameLine();
+            HelpMarker("Shows fire hazards movement.");
+
+            ImGuiMCP::Checkbox("Draw Decals", &set->DrawDecals);
+            ImGuiMCP::SameLine();
+            HelpMarker("Shows spawned decals.");
+
+            ImGuiMCP::Checkbox("Draw Wind", &set->DrawWind);
+            ImGuiMCP::SameLine();
+            HelpMarker("Visualize wind strenght and direction");
 
             ImGuiMCP::SliderInt("Debug Draw Duration (ms)", &set->DebugDrawDuration, 1, 10000);
             ImGuiMCP::SameLine();
@@ -116,6 +330,9 @@ namespace MCP {
                 set->MinGrassColorValue = static_cast<uint8_t>(grassColorValue);
             }
             ImGuiMCP::SetTooltip("Minimum vertex color brightness");
+
+            ImGuiMCP::SliderFloat("Grass Height Decrease", &set->GrassHeightDecrease, 0.0f, 100.0f, "%.1f");
+            ImGuiMCP::SetTooltip("How much grass height will decrese when burned");
         }
 
         // =========================
@@ -133,6 +350,27 @@ namespace MCP {
 
             ImGuiMCP::SliderFloat("Ref Min Heat", &set->DefaultMinRefHeat, -200.0f, 0.0f, "%.1f");
             ImGuiMCP::SetTooltip("Minimum temperature references can reach.");
+
+            ImGuiMCP::SliderFloat("Underwater Ratio", &set->UnderwaterRatio, 0.0f, 1.0f, "%.2f");
+            ImGuiMCP::SetTooltip("How much of a reference must be underwater to be considered underwater.");
+
+            ImGuiMCP::SliderFloat("Fuel Recovery Rate", &set->FuelRecoveryRate, 0.0f, 10.0f, "%.2f");
+            ImGuiMCP::SetTooltip("Rate at which fuel recovers for non-burning references.");
+        }
+        // =========================
+        // Decals Settings
+        // =========================
+        if (ImGuiMCP::CollapsingHeader("Decals (Burned Ground)", ImGuiMCP::ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGuiMCP::SliderFloat("Min Dacal Size", &set->MinDacalSize, 200.0f, 500.0f, "%.0f");
+            ImGuiMCP::SetTooltip("Minimum size of decal");
+
+            ImGuiMCP::SliderFloat("Max Dacal Size", &set->MaxDacalSize, 300.0f, 700.0f, "%.0f");
+            ImGuiMCP::SetTooltip("Maximum size of decal");
+
+            ImGuiMCP::SliderInt("Decal Spacing", &set->DecalSpacing, 1, 288);
+            ImGuiMCP::SetTooltip("Spacing between decals.");
+            int decalsPerQuad = 289 / set->DecalSpacing;
+            ImGuiMCP::Text("Decals per Quad: %d Cell: %d", decalsPerQuad, decalsPerQuad*4);
         }
 
         // =========================
@@ -193,7 +431,7 @@ namespace MCP {
         // Hazards
         // =========================
         if (ImGuiMCP::CollapsingHeader("Hazards", ImGuiMCP::ImGuiTreeNodeFlags_DefaultOpen)) {
-            ImGuiMCP::SliderInt("Max Hazard Spawn", &set->MaxHazardSpawn, 1, 60);
+            ImGuiMCP::SliderInt("Max Hazard Spawn", &set->MaxHazardSpawn,-1, 200);
             ImGuiMCP::SameLine();
             HelpMarker(
                 "The engine only renders about 30 hazards at once.\n"
@@ -451,56 +689,76 @@ namespace MCP {
             return;
         }
         hazardRef->SetPosition(pos);
-    }
+     }
+
+     RE::BGSShaderParticleGeometryData::SETTING_VALUE& GetSettingValueRef(RE::BGSShaderParticleGeometryData* data,
+                                       RE::BGSShaderParticleGeometryData::DataID id) {
+         if (REL::Module::IsVR()) {
+             return data->GetVRRuntimeData().data[(uint32_t)id].value;
+         } else {
+             return data->GetRuntimeData().data[(uint32_t)id];
+         }
+     }
+
+     void __stdcall RenderCellGrass() {
+         auto* player = RE::PlayerCharacter::GetSingleton();
+         auto cell = player->GetParentCell();
+
+         auto cellGrassData = cell->extraList.GetByType(RE::ExtraDataType::kCellGrassData);
+         if (cellGrassData) {
+             auto grassData = static_cast<RE::ExtraCellGrassData*>(cellGrassData);
+             for (auto grassHandler : grassData->grassHandles) {
+                 if (grassHandler) {
+                     DrawModelInspector(grassHandler->triShape.get());
+                 }
+             }
+         }
+     }
+     
 
     void __stdcall RenderDebugTools() {
 
-        if (auto player = RE::PlayerCharacter::GetSingleton()) {
-            auto cell = player->parentCell;  // Player's current cell
-            if (cell) {
-                ImGuiMCP::Text("Current Cell Info:");
-                ImGuiMCP::Text("Cell Ptr: %p", cell);
+        static float lifetime = 10.0f;
 
-                // Access ExtraCellGrassData
-                auto extraData = cell->extraList.GetByType(RE::ExtraDataType::kCellGrassData);
-                auto* extraGrass = extraData ? static_cast<RE::ExtraCellGrassData*>(extraData) : nullptr;
+        auto player = RE::PlayerCharacter::GetSingleton();
+        auto cell = player->GetParentCell();
 
-                if (extraGrass) {
-                    ImGuiMCP::Text("ExtraCellGrassData Ptr: %p", extraGrass);
-                    ImGuiMCP::Text("AddGrassTask Ptr: %p", extraGrass->addGrassTask.get());
-                    ImGuiMCP::Text("Grass Handles Count: %zu", extraGrass->grassHandles.size());
+        if (auto extra = cell->extraList.GetByType(RE::ExtraDataType::kCellGrassData)) {
+            auto grassData = static_cast<RE::ExtraCellGrassData*>(extra);
 
-                    // Loop through all CellGrassData
-                    for (std::size_t i = 0; i < extraGrass->grassHandles.size(); i++) {
-                        auto* grass = extraGrass->grassHandles[i];
-                        if (!grass) continue;
-
-                        ImGuiMCP::Separator();
-                        ImGuiMCP::Text("Grass Index: %zu", i);
-                        ImGuiMCP::Text("Grass Ptr: %p", grass);
-                        ImGuiMCP::Text("Grass Type Key: 0x%llX", grass->grassTypeKey);
-                        ImGuiMCP::Text("Grass Model Key: %s", grass->grassModelKey.c_str());
-                        ImGuiMCP::Text("TriShape Ptr: %p", grass->triShape.get());
-                        ImGuiMCP::Text("Unk18 Size: %zu", grass->unk18.size());
-                        ImGuiMCP::Text("Unk30 Size: %zu", grass->unk30.size());
-
-                        // Optional: iterate through unk18 and unk30 if you want full detail
-                        for (std::size_t j = 0; j < grass->unk18.size(); j++) {
-                            ImGuiMCP::Text("  unk18[%zu] Ptr: %p", j, grass->unk18[j]);
-                        }
-                        for (std::size_t j = 0; j < grass->unk30.size(); j++) {
-                            ImGuiMCP::Text("  unk30[%zu] Ptr: %p", j, grass->unk30[j]);
-                        }
-                    }
-                } else {
-                    ImGuiMCP::Text("No ExtraCellGrassData found in this cell.");
+            uint32_t index = 0;
+            for (auto* handle : grassData->grassHandles) {
+                if (!handle || !handle->triShape) {
+                    ++index;
+                    continue;
                 }
-            } else {
-                ImGuiMCP::Text("Player is not in a valid cell.");
+
+                ImGuiMCP::PushID(index);
+
+                DrawModelInspector(handle->triShape.get());
+
+                float z = handle->triShape.get()->local.translate.z;
+
+                if (ImGuiMCP::DragFloat("##Z", &z, 0.01f, -1000.0f, 1000.0f)) {
+                    handle->triShape.get()->local.translate.z = z;
+                    RE::NiUpdateData updData;
+                    updData.flags = RE::NiUpdateData::Flag::kNone;
+                    updData.time = 0.0f;
+                    handle->triShape.get()->Update(updData);
+                }
+
+                ImGuiMCP::Text("Handle %u", index);
+                ImGuiMCP::Separator();
+
+                ImGuiMCP::PopID();
+
+                ++index;
             }
         }
 
-        static float lifetime = 10.0f;
+        ImGuiMCP::Text("BGSGrassManager grassNode");
+        auto grassMgr = RE::BGSGrassManager::GetSingleton();
+        DrawModelInspector(grassMgr->grassNode.get());
 
         ImGuiMCP::Text("Wind Data");
         auto isRaining = Weather::IsRaining();
@@ -514,8 +772,8 @@ namespace MCP {
         ImGuiMCP::Text("Wind Direction: %s", GetCompassLabel(windData.direction));
         auto* sky = RE::Sky::GetSingleton();
         if (sky) {
-            ImGuiMCP::SliderFloat("Direction", &sky->windAngle, 0.0f, 6.28318f);
-            ImGuiMCP::SliderFloat("Wind Speed", &sky->windSpeed, 0.0f, 10.0f);
+            ImGuiMCP::SliderFloat("Sky: Wind Direction", &sky->windAngle, -6.28318f, 6.28318f);
+            ImGuiMCP::SliderFloat("Sky: Wind Speed", &sky->windSpeed, 0.0f, 10.0f);
         }
 
         ImGuiMCP::SliderFloat("Hazard Lifetime", &lifetime, 1.0f, 60.0f, "%.1f");
@@ -552,7 +810,22 @@ namespace MCP {
         ImGuiMCP::Text("Hazard Limit Test");
         ImGuiMCP::SliderInt("Hazard Count", &hazardCount, 1, 100);
         ImGuiMCP::Text("Spawns hazards in a circle around the player to test the max hazard limit. Spoiler: it's 30");
-        if (ImGuiMCP::Button("Spawn Multiple Hazards")) {
+        if (ImGuiMCP::Button("Spawn Small Hazards")) {
+            auto player = RE::PlayerCharacter::GetSingleton();
+            if (player) {
+                auto pos = player->GetPosition();
+                for (int i = 0; i < hazardCount; ++i) {
+                    // spawn hazards in a circle around the player
+                    float angle = (i / static_cast<float>(hazardCount)) * 2.0f * 3.14159f;
+                    float radius = 100.0f;  // 100 units away from the player
+                    pos.x += radius * std::cos(angle);
+                    pos.y += radius * std::sin(angle);
+                    SpawnHazardDebug(pos, HazardType::SmallFireHazard, lifetime);
+                }
+            }
+        }
+        ImGuiMCP::SameLine();
+        if (ImGuiMCP::Button("Spawn Medium Hazards")) {
             auto player = RE::PlayerCharacter::GetSingleton();
             if (player) {
                 auto pos = player->GetPosition();
@@ -563,6 +836,52 @@ namespace MCP {
                     pos.x += radius * std::cos(angle);
                     pos.y += radius * std::sin(angle);
                     SpawnHazardDebug(pos, HazardType::MediumFireHazard, lifetime);
+                }
+            }
+        }
+        ImGuiMCP::SameLine();
+        if (ImGuiMCP::Button("Spawn Big Hazards")) {
+            auto player = RE::PlayerCharacter::GetSingleton();
+            if (player) {
+                auto pos = player->GetPosition();
+                for (int i = 0; i < hazardCount; ++i) {
+                    // spawn hazards in a circle around the player
+                    float angle = (i / static_cast<float>(hazardCount)) * 2.0f * 3.14159f;
+                    float radius = 100.0f;  // 100 units away from the player
+                    pos.x += radius * std::cos(angle);
+                    pos.y += radius * std::sin(angle);
+                    SpawnHazardDebug(pos, HazardType::BigFireHazard, lifetime);
+                }
+            }
+        }
+        ImGuiMCP::SameLine();
+        if (ImGuiMCP::Button("Spawn Large Hazards")) {
+            auto player = RE::PlayerCharacter::GetSingleton();
+            if (player) {
+                auto pos = player->GetPosition();
+                for (int i = 0; i < hazardCount; ++i) {
+                    // spawn hazards in a circle around the player
+                    float angle = (i / static_cast<float>(hazardCount)) * 2.0f * 3.14159f;
+                    float radius = 100.0f;  // 100 units away from the player
+                    pos.x += radius * std::cos(angle);
+                    pos.y += radius * std::sin(angle);
+                    SpawnHazardDebug(pos, HazardType::LargeFireHazard, lifetime);
+                }
+            }
+        }
+
+        static RE::TESObjectREFRPtr DummyRef{nullptr};
+        ImGuiMCP::Text("Hazard Manipulation Test");
+        if (ImGuiMCP::Button("Spawn Dummy Hazard")) {
+            auto* DummyHazardTospawn = RE::TESForm::LookupByEditorID<RE::BGSHazard>("Wildfire_DummyHazard01");
+
+            DummyRef = player->PlaceObjectAtMe(DummyHazardTospawn, false);
+
+        }
+        if (DummyRef) {
+            if (auto DummyRef3D = DummyRef->Get3D()) {
+                if (auto fade = DummyRef3D->AsFadeNode()) {
+                    ImGuiMCP::SliderFloat("HazardFade", &fade->GetRuntimeData().currentFade, 0.0f, 2.0f);
                 }
             }
         }

@@ -1,16 +1,17 @@
 #pragma once
 
-#include "Settings.h"
-
 namespace MCP {
 
     void Register();
     void __stdcall RenderSettings();
+    void __stdcall RenderConfigCreator();
+    void __stdcall RenderConfigEditor();
 
-    // For debug purposes
+    // For debug and development purposes
     void __stdcall RenderBurningGird();
     void __stdcall RenderBurningRefs();
     void __stdcall RenderDebugTools();
+    void __stdcall RenderCellGrass();
     void __stdcall RenderLog();
 
     inline std::vector<std::string> logLines;
