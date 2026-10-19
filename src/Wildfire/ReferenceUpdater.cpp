@@ -13,26 +13,82 @@
 #include <random>
 
 ReferenceUpdater::ReferenceUpdater() : running_(false) {
-    auto* charredEffectShaderForm = RE::TESForm::LookupByEditorID("Wildfire_CharredFXS");
-    auto* burningEffectShaderForm = RE::TESForm::LookupByEditorID("Wildfire_BurningFXS");
-    auto* frostEffectShaderForm = RE::TESForm::LookupByEditorID("Wildfire_FrostFXS");
-    auto* emptyEffectShaderForm = RE::TESForm::LookupByEditorID("Wildfire_EmptyFXS");
-    
-    
-    if (charredEffectShaderForm && burningEffectShaderForm && frostEffectShaderForm && emptyEffectShaderForm) {
-        Wildfire_CharredFXS = charredEffectShaderForm->As<RE::TESEffectShader>();
-        Wildfire_BurningFXS = burningEffectShaderForm->As<RE::TESEffectShader>();
-        Wildfire_FrostFXS = frostEffectShaderForm->As<RE::TESEffectShader>();
-        Wildfire_EmptyFXS = emptyEffectShaderForm->As<RE::TESEffectShader>();
+    CharredFXS = RE::TESForm::LookupByEditorID<RE::TESEffectShader>("Wildfire_CharredFXS");
+    BurningFXS = RE::TESForm::LookupByEditorID<RE::TESEffectShader>("Wildfire_BurningFXS");
+    FrostFXS = RE::TESForm::LookupByEditorID<RE::TESEffectShader>("Wildfire_FrostFXS");
+    EmptyFXS = RE::TESForm::LookupByEditorID<RE::TESEffectShader>("Wildfire_EmptyFXS");
+    DesintegrateFXS = RE::TESForm::LookupByEditorID<RE::TESEffectShader>("Wildfire_DesintegrateFXS");
+
+    const char* BranchesIds[] = {"Wildfire_BranchPile01", "Wildfire_BranchPile02"};
+
+    for (auto id : BranchesIds) {
+        if (auto* Branch = RE::TESForm::LookupByEditorID<RE::TESBoundObject>(id)) {
+            DefaultBurnedBranches.push_back(Branch);
+        } else {
+            logger::warn("Burned Branches '{}' not found, skipping.", id);
+        }
+    }
+
+    const char* dummyIds[] = {"Wildfire_DummyHazard01", "Wildfire_DummyHazard02", "Wildfire_DummyHazard03",
+                              "Wildfire_DummyHazard04", "Wildfire_DummyHazard05", "Wildfire_DummyHazard06",
+                              "Wildfire_DummyHazard07", "Wildfire_DummyHazard08", "Wildfire_DummyHazard09"};
+
+    for (auto id : dummyIds) {
+        if (auto* hazard = RE::TESForm::LookupByEditorID<RE::BGSHazard>(id)) {
+            DummyHazards.push_back(hazard);
+        } else {
+            logger::warn("Dummy hazard '{}' not found, skipping.", id);
+        }
+    }
+
+    if (CharredFXS && BurningFXS && FrostFXS && EmptyFXS && DesintegrateFXS) {
         logger::info("Effect shaders forms found and loaded.");
     } else {
         logger::error("Effect shaders forms not found. Please make sure Wildfire.esp is active");
         RE::DebugMessageBox("Wildfire Error: Effect shaders forms not found. Please make sure Wildfire.esp is active");
     }
+
+    if (!DefaultBurnedBranches.empty()) {
+        logger::info("Burned branches forms found and loaded. (count={}).", DefaultBurnedBranches.size());
+    } else {
+        logger::error("Burned branches forms not found. Please make sure Wildfire.esp is active");
+        RE::DebugMessageBox("Wildfire Error: Burned branches forms not found. Please make sure Wildfire.esp is active");
+    }
+
+    if (!DummyHazards.empty()) {
+        logger::info("Dummy Hazard(s) found and loaded (count={}).", DummyHazards.size());
+    } else {
+        logger::error("No Dummy Hazards found. Please make sure Wildfire.esp is active");
+        RE::DebugMessageBox("Wildfire Error: Dummy Hazard not found. Please make sure Wildfire.esp is active");
+    }
+}
+
+// Credits to Po3:
+// https://github.com/powerof3/po3-Tweaks/blob/2eb5f73f6f9404c3e933e3b2aed1e5a518f559ab/src/Fixes/ToggleCollision.cpp#L23
+static void ToggleRefCollision(RE::TESObjectREFR* a_ref, bool a_disable) {
+    if (const auto root = a_ref->Get3D(); root) {
+        const auto cell = a_ref->GetParentCell();
+
+        if (const auto world = cell ? cell->GetbhkWorld() : nullptr) {
+            RE::BSWriteLockGuard locker(world->worldLock);
+
+            RE::BSVisit::TraverseScenegraphCollision(
+                root, [&](RE::bhkNiCollisionObject* a_col) -> RE::BSVisit::BSVisitControl {
+                    if (auto hkpBody = a_col->body
+                                           ? static_cast<RE::hkpWorldObject*>(a_col->body->referencedObject.get())
+                                           : nullptr;
+                        hkpBody) {
+                        hkpBody->collidable.broadPhaseHandle.collisionFilterInfo.SetNoCollision(a_disable);
+                    }
+                    return RE::BSVisit::BSVisitControl::kContinue;
+                });
+        }
+    }
 }
 
 static void SendFireEventsAcrossBounds(RefState refState, float wheatherFactor) {
     static auto TaskInterface = SKSE::GetTaskInterface();
+    static auto set = Settings::GetSingleton();
 
     auto bounds = refState.BBox;
 
@@ -67,21 +123,23 @@ static void SendFireEventsAcrossBounds(RefState refState, float wheatherFactor) 
 
     RE::NiPoint3 start = center - dir * (maxDim / 2.0f);
 
-    float damage = refState.heat * 0.5f * wheatherFactor;
+    float damage = refState.heat * 0.25f * wheatherFactor;
     auto refPos = refState.position;
     for (int i = 0; i <= steps; ++i) {
         RE::NiPoint3 pos = start + dir * (i * radius);
         TaskInterface->AddTask([pos, radius, damage, refPos]() {
-            WildfireMgr::GetSingleton()->AddGrassEvent(pos, radius, damage, ElementType::Fire);
+            auto scaledDamage = damage * set->FireDamageMultiplayer;
+            auto* WildfireMgr = WildfireMgr::GetSingleton();
+            WildfireMgr->AddGrassEvent(pos, radius, scaledDamage, ElementType::Fire);
 
             RE::TES::GetSingleton()->ForEachReferenceInRange(
-                pos, radius, [damage, pos, radius, refPos](RE::TESObjectREFR* ref) {
-                    static auto* WildfireMgr = WildfireMgr::GetSingleton();
+                pos, radius, [damage, pos, radius, refPos, WildfireMgr](RE::TESObjectREFR* ref) {
+                    
                     if (ref) {
                         if (Utils::IsSupportedForm(ref) && ref->GetPosition() != refPos) {
                             auto newRefPos = ref->GetPosition();
                             auto distance = pos.GetDistance(newRefPos);
-                            float adjusted_damage = damage * (distance / radius);
+                            float adjusted_damage = damage * (distance / radius) * set->FireDamageMultiplayer;
                             WildfireMgr->AddRefEvent(ref, adjusted_damage, ElementType::Fire);
                             WildfireMgr->SendHitEvent(ref);
                         }
@@ -136,6 +194,8 @@ void ReferenceUpdater::OnGameLoad() {
         std::lock_guard lock(createRefStateMutex);
         createRefStateQueue.swap(empty);
     }
+    MeltingObjects.clear();
+    FadingObjects.clear();
 }
 
 bool ReferenceUpdater::StartUpdate(RefEventType& refEvents, RefStateMapType& burningRefs, WeatherData& wheatherData,
@@ -174,9 +234,7 @@ bool ReferenceUpdater::StartUpdate(RefEventType& refEvents, RefStateMapType& bur
 
                 float ratio = aboveWaterHeight / totalHeight;
 
-                constexpr float burnThreshold = 0.30f;
-
-                if (ratio < burnThreshold) {
+                if (ratio <= set->UnderwaterRatio) {
                     state.isUnderwater = true;
                 } else {
                     state.isUnderwater = false;
@@ -184,21 +242,23 @@ bool ReferenceUpdater::StartUpdate(RefEventType& refEvents, RefStateMapType& bur
             }
         }
         if (set->DebugMode && set->DrawBoundBoxes) {
-            RE::NiColorA colour{0, 1, 0, 1}; // Green
+            if (ref->GetParentCell() == RE::PlayerCharacter::GetSingleton()->GetParentCell()) {
+                RE::NiColorA colour{0, 1, 0, 1};  // Green
 
-            if (state.isBurning)
-                colour = {1, 0, 0, 1};
-            else if (state.isCharred)
-                colour = {0, 0, 0, 1};
-            else if (state.isUnderwater)
-                colour = {0, 0, 1, 1};
-            else if (!state.canBurn)
-                colour = {0.75f, 0.75f, 0.75f, 1};
-            else if (state.heat > 0)
-                colour = {1, 1, 0, 1};
-            else if (state.heat < 0)
-                colour = {0, 1, 1, 1};
-            DrawObjectBoundsBox(ref, set->DebugDrawDuration, colour, 1);
+                if (state.isBurning)
+                    colour = {1, 0, 0, 1};
+                else if (state.isCharred)
+                    colour = {0, 0, 0, 1};
+                else if (state.isUnderwater)
+                    colour = {0, 0, 1, 1};
+                else if (!state.canBurn)
+                    colour = {0.75f, 0.75f, 0.75f, 1};
+                else if (state.heat > 0)
+                    colour = {1, 1, 0, 1};
+                else if (state.heat < 0)
+                    colour = {0, 1, 1, 1};
+                DrawObjectBoundsBox(ref, set->DebugDrawDuration, colour, 1);
+            }
         }
     }
     while (!objToRemove.empty()) {
@@ -249,11 +309,105 @@ void ReferenceUpdater::ClearResult() {
     result_.reset();
 }
 
+
+void ReferenceUpdater::TransformObjects(float delta) {
+    auto start = std::chrono::high_resolution_clock::now();
+    static auto* set = Settings::GetSingleton();
+
+    constexpr float kDurationSeconds = 5.0f;
+    const float decayPerSec = 1.0f / kDurationSeconds;
+    const float decay = decayPerSec * delta;
+
+    // Process melting objects
+    for (auto it = MeltingObjects.begin(); it != MeltingObjects.end();) {
+        auto handle = it->refHandle;
+        auto baseObjectSwap = it->baseObjectSwap;
+        auto& Progress = it->Progress;
+
+        auto* ref = handle.get().get();
+        if (!ref || ref->IsDisabled() || ref->IsDeleted()) {
+            it = MeltingObjects.erase(it);
+            continue;
+        }
+
+        Progress = std::max(0.0f, Progress - decay);
+        MeltObject(ref, baseObjectSwap, Progress);
+
+        if (Progress <= 0.0f) {
+            it = MeltingObjects.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    for (auto it = FadingObjects.begin(); it != FadingObjects.end();) {
+        auto handle = it->refHandle;
+        auto baseObjectSwap = it->baseObjectSwap;
+        auto& Progress = it->Progress;
+
+        auto* ref = handle.get().get();
+        if (!ref || ref->IsDisabled() || ref->IsDeleted()) {
+            it = FadingObjects.erase(it);
+            continue;
+        }
+
+        Progress = std::max(0.0f, Progress - decay);
+
+        FadeOutObject(ref, baseObjectSwap, Progress);
+
+        if (Progress <= 0.0f) {
+            it = FadingObjects.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    if (set->EnableTimeLogging) {
+        auto end = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double, std::milli> elapsed = end - start;
+        logger::debug("ReferenceUpdater: Transform Objects in {} ms", elapsed.count());
+    }
+}
+
+ static void ReplaceModel(RE::TESObjectREFR* ref, std::string modelPath) {
+    SKSE::GetTaskInterface()->AddTask([ref, modelPath = std::move(modelPath)]() {
+        if (!ref) return;
+        if (!modelPath.ends_with(".nif")) {
+            logger::error("Model file is not a NIF: {}", modelPath);
+            return;
+        }
+        RE::NiPointer<RE::NiNode> newModel{nullptr};
+        if (RE::BSResource::ErrorCode::kNone == RE::BSModelDB::Demand(modelPath.c_str(), newModel, {})) {
+            RE::NiPointer<RE::NiObject> deepCopy;
+            if (newModel && newModel.get()) {
+                newModel->CreateDeepCopy(deepCopy);
+            }
+            RE::NiAVObject* constructedObject = deepCopy ? deepCopy->AsNode() : nullptr;
+            if (constructedObject) {
+                ref->Set3D(constructedObject, false);
+            }
+        } else {
+            logger::error("Failed to load model for replacement");
+        }
+    });
+}
+
+static void ReplaceBaseObject(RE::TESObjectREFR* ref, RE::TESBoundObject* newBase) {
+    if (!ref || !newBase) {
+        return;
+    }
+    ToggleRefCollision(ref, true);
+    ref->SetCollision(false);
+    ref->Disable();
+    ref->Enable(false);
+    ref->data.objectReference = newBase;
+}
+
 RefStateMapType ReferenceUpdater::ReferenceUpdateLogic(RefEventType refEvents, RefStateMapType burningRefs,
                                                        WeatherData wheatherData, float delta) {
     auto start = std::chrono::high_resolution_clock::now();
-    auto* set = Settings::GetSingleton();
-    logger::info("Starting refs update with {} refEvents, {} refs in burningRefs and {} delta", refEvents.size(),
+    static auto* set = Settings::GetSingleton();
+    logger::info("[Thread] Starting refs update with {} refEvents, {} burningRefs and {} delta", refEvents.size(),
                  burningRefs.size(), delta);
 
     auto* TaskInterface = SKSE::GetTaskInterface();
@@ -288,7 +442,7 @@ RefStateMapType ReferenceUpdater::ReferenceUpdateLogic(RefEventType refEvents, R
                 } else if (type == ElementType::Water) {
                     refState->heat = std::max(newHeat, 0.0f);
                 } else {
-                    refState->heat = std::min(newHeat, set->DefaultMaxRefHeat);
+                    refState->heat = std::min(newHeat, std::max(refState->ignitionHeat, set->DefaultMaxRefHeat));
                 }
 
                 if (refState->heat >= refState->ignitionHeat && refState->canBurn && !refState->isBurning &&
@@ -335,10 +489,11 @@ RefStateMapType ReferenceUpdater::ReferenceUpdateLogic(RefEventType refEvents, R
             }
         }
     }
-
-    auto afterEvents = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double, std::milli> elapsed = afterEvents - start;
-    logger::info("Processed {} fire refEvents in {} ms", refEvents.size(), elapsed.count());
+    if (set->EnableTimeLogging) {
+        auto afterEvents = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double, std::milli> elapsed = afterEvents - start;
+        logger::info("[Thread] Processed {} fire refEvents in {} ms", refEvents.size(), elapsed.count());
+    }
 
     // Step 2 : Simulate fire and cooling for each ref in the burningRefs
     float RainingFactor = wheatherData.isRaining ? set->RainingFactor : 1.0f;
@@ -350,6 +505,13 @@ RefStateMapType ReferenceUpdater::ReferenceUpdateLogic(RefEventType refEvents, R
         } else if (state.isBurning) {
             if (state.isUnderwater) {
                 state.isBurning = false;
+                state.heat = 0.0f;
+                TaskInterface->AddTask([this, refHandle]() {
+                    if (auto ref = refHandle.get().get()) {
+                        RemoveFX(ref);
+                        ref->SetActivationBlocked(false);
+                    }
+                });
                 continue;
             }
 
@@ -357,29 +519,94 @@ RefStateMapType ReferenceUpdater::ReferenceUpdateLogic(RefEventType refEvents, R
                 std::min(state.heat + (set->FuelConsumptionRate * set->FuelToHeatRate * delta), set->DefaultMaxRefHeat);
             state.fuel -= set->FuelConsumptionRate * delta;
 
-            if (state.fuel < state.initialFuel * 0.5f && state.halfEvent == false) {
+            if (state.initialFuel > 0.0f && state.fuel < state.initialFuel * 0.5f && state.halfEvent == false) {
                 state.halfEvent = true;
                 SendFireEventsAcrossBounds(state, wheatherFactor);
                 state.heat *= 0.5;
-            }
-            if (state.fuel < state.initialFuel * 0.5f) {
-                float progress = state.fuel / std::max(state.initialFuel, 0.000001f);
-                TaskInterface->AddTask([this, refHandle, progress]() {
-                    if (auto ref = refHandle.get().get()) {
-                        RemoveLeavesSmooth(ref, progress);
-                    }
-                });
             }
 
             if (state.fuel <= 0.0f) {
                 state.isBurning = false;
                 state.isCharred = true;
-                SendFireEventsAcrossBounds(state, wheatherFactor);
-                TaskInterface->AddTask([this, refHandle]() {
-                    if (auto ref = refHandle.get().get()) {
-                        ApplyCharredFX(ref);
-                    }
-                    });
+                if (state.initialFuel > 0.0f) {
+                    SendFireEventsAcrossBounds(state, wheatherFactor);
+                }
+                switch (state.type) {
+                    case RefType::Static:
+                        TaskInterface->AddTask([this, refHandle]() {
+                            if (auto ref = refHandle.get().get()) {
+                                ApplyCharredFX(ref);
+                                SpawnSmokeAndDecal(ref);
+                            }
+                        });
+                        break;
+                    case RefType::Tree:
+                        TaskInterface->AddTask([this, refHandle]() {
+                            if (auto ref = refHandle.get().get()) {
+                                RemoveLeavesSmooth(ref);
+                                ApplyCharredFX(ref);
+                                // Remove Tree Animation
+                                SpawnSmokeAndDecal(ref);
+                            }
+                        });
+                        break;
+                    case RefType::Bush:
+                        TaskInterface->AddTask([this, refHandle]() {
+                            if (auto ref = refHandle.get().get()) {
+                                int random = rand() % DefaultBurnedBranches.size();
+                                RE::TESBoundObject* newBase = DefaultBurnedBranches[random];
+                                //ApplyDesintegrateFX(refHandle, newBase);
+                                SpawnSmokeAndDecal(ref);
+                                TransformingData data;
+                                data.refHandle = refHandle;
+                                data.baseObjectSwap = newBase;
+                                FadingObjects.push_back(data);
+                            }
+                        });
+                        break;
+                    case RefType::FloraCoveredUnburnable:
+                         TaskInterface->AddTask([this, refHandle]() {
+                            if (auto ref = refHandle.get().get()) {
+                                RemoveFX(ref);
+                                RemoveLeavesSmooth(ref);
+                                SpawnSmokeAndDecal(ref);
+                            }
+                        });
+                        break;
+                    case RefType::BaseObjSwap:
+                        TaskInterface->AddTask([this, refHandle, baseObjectSwap = state.baseObjectSwap]() {
+                            if (auto ref = refHandle.get().get()) {
+                                RemoveFX(ref);
+                                ReplaceBaseObject(ref, baseObjectSwap);
+                                SpawnSmokeAndDecal(ref);
+                            }
+                        });
+                        break;
+                    case RefType::Disintegrate:
+                        TaskInterface->AddTask([this, refHandle, baseObjectSwap = state.baseObjectSwap]() {
+                            if (auto ref = refHandle.get().get()) {
+                                //ApplyDesintegrateFX(refHandle, baseObjectSwap);RemoveCollision(ref);
+                                TransformingData data;
+                                data.refHandle = refHandle;
+                                data.baseObjectSwap = baseObjectSwap;
+                                FadingObjects.push_back(data);
+                                SpawnSmokeAndDecal(ref);
+                            }
+                        });
+                        break;
+                    case RefType::Melt:
+                        TaskInterface->AddTask([this, refHandle, baseObjectSwap = state.baseObjectSwap]() {
+                            if (auto ref = refHandle.get().get()) {
+                                RemoveFX(ref);
+                                RemoveCollision(ref);
+                                TransformingData data;
+                                data.refHandle = refHandle;
+                                data.baseObjectSwap = baseObjectSwap;
+                                MeltingObjects.push_back(data);
+                            }
+                        });
+                        break;
+                }
             }
         } else if (state.heat > 0.0f) {
             // Cool down the ref if not burning
@@ -404,12 +631,18 @@ RefStateMapType ReferenceUpdater::ReferenceUpdateLogic(RefEventType refEvents, R
                     }
                 });
             }
+        } else if (state.fuel < state.initialFuel) {
+            state.fuel += set->FuelRecoveryRate * delta;
+            if (state.fuel > state.initialFuel) {
+                state.fuel = state.initialFuel;
+            }
         }
     }
-
-    auto end = std::chrono::high_resolution_clock::now();
-    elapsed = end - start;
-    logger::debug("ReferenceUpdater: processed in {} ms", elapsed.count());
+    if (set->EnableTimeLogging) {
+        auto end = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double, std::milli> elapsed = end - start;
+        logger::debug("[Thread] ReferenceUpdater: processed in {} ms", elapsed.count());
+    }
     return burningRefs;
 }
 
@@ -439,28 +672,92 @@ RefState* ReferenceUpdater::GetRefState(RefStateMapType& burningRefs, RE::Object
 
 void ReferenceUpdater::ApplyBurningFX(RE::TESObjectREFR* ref) {
     if (!ref) return;
-    ref->ApplyEffectShader(Wildfire_BurningFXS);
+    //ref->ApplyEffectShader(BurningFXS);
 }
 
 void ReferenceUpdater::ApplyCharredFX(RE::TESObjectREFR* ref) {
     if (!ref) return;
-    ref->ApplyEffectShader(Wildfire_CharredFXS);
+    ref->ApplyEffectShader(CharredFXS);
 }
 
 void ReferenceUpdater::ApplyFrostFX(RE::TESObjectREFR* ref) {
     if (!ref) return;
-    ref->ApplyEffectShader(Wildfire_FrostFXS);
+    ref->ApplyEffectShader(FrostFXS);
+}
+
+void ReferenceUpdater::ApplyDesintegrateFX(RE::ObjectRefHandle refHandle, RE::TESBoundObject* baseObjectSwap) {
+    if (auto ref = refHandle.get().get()) {
+        ref->ApplyEffectShader(DesintegrateFXS);
+        clib_utilsQTR::Tasker::GetSingleton()->PushTask(
+            [this, refHandle, baseObjectSwap]() {
+                SKSE::GetTaskInterface()->AddTask([refHandle, baseObjectSwap]() {
+                    if (auto ref = refHandle.get().get()) {
+                        ToggleRefCollision(ref, true);
+                        ref->SetCollision(false);
+                        if (baseObjectSwap) {
+                            ReplaceBaseObject(ref, baseObjectSwap);
+                        } else {
+                            if (auto* ref3D = ref->Get3D()) {
+                                ref3D->CullGeometry(true);
+                            }
+                        }
+                    }
+                });
+            },
+            5000);
+    }
+}
+
+void ReferenceUpdater::MeltObject(RE::TESObjectREFR* ref, RE::TESBoundObject* baseObjectSwap, float meltingProgress) {
+    if (ref->HasCollision()) {
+        ToggleRefCollision(ref, true);
+        ref->SetCollision(false);
+    }
+    if (auto obj3d = ref->Get3D()) {
+        if (meltingProgress > 0.0f) {
+            obj3d->local.rotate.entry[2][2] = meltingProgress;
+            if (auto fade = obj3d->AsFadeNode()) {
+                fade->GetRuntimeData().currentFade = meltingProgress;
+            }
+            RE::NiUpdateData updData;
+            updData.flags = RE::NiUpdateData::Flag::kNone;
+            updData.time = 0.0f;
+            obj3d->UpdateTransformAndBounds(updData);
+        } else {
+            if (baseObjectSwap) {
+                ReplaceBaseObject(ref, baseObjectSwap);
+            } else {
+                obj3d->CullGeometry(true);
+            }
+        }
+    }
+}
+
+void ReferenceUpdater::FadeOutObject(RE::TESObjectREFR* ref, RE::TESBoundObject* baseObjectSwap,
+                                     float fadeOutProgress) {
+    if (auto obj3d = ref->Get3D()) {
+        if (fadeOutProgress > 0.0f) {
+            if (auto fade = obj3d->AsFadeNode()) {
+                fade->GetRuntimeData().currentFade = fadeOutProgress;
+            }
+        } else {
+            if (baseObjectSwap) {
+                ReplaceBaseObject(ref, baseObjectSwap);
+            } else {
+                obj3d->CullGeometry(true);
+            }
+        }
+    }
 }
 
 void ReferenceUpdater::RemoveFX(RE::TESObjectREFR* ref) {
     if (!ref) return;
-    ref->ApplyEffectShader(Wildfire_EmptyFXS, 0.01f);
+    ref->ApplyEffectShader(EmptyFXS);
 }
 
 static void CullAlphaGeometryRecursive(RE::NiAVObject* obj) {
     if (!obj) return;
 
-    // logger::debug("Parent {}: CullAlphaGeometryRecursive: {}", obj->parent->name.c_str(), obj->name.c_str());
     if (auto triShape = obj->AsTriShape()) {
         auto& geomData = triShape->GetGeometryRuntimeData();
         auto& prop = geomData.alphaProperty;
@@ -476,20 +773,90 @@ static void CullAlphaGeometryRecursive(RE::NiAVObject* obj) {
     }
 }
 
-void ReferenceUpdater::RemoveLeavesSmooth(RE::TESObjectREFR* ref, float progress) {
+static void CullNonAlphaGeometryRecursive(RE::NiAVObject* obj) {
+    if (!obj) return;
+
+    if (auto triShape = obj->AsTriShape()) {
+        auto& geomData = triShape->GetGeometryRuntimeData();
+        auto& prop = geomData.alphaProperty;
+        if (!prop) {
+            triShape->CullGeometry(true);
+        }
+    }
+
+    if (obj->AsNode()) {
+        for (auto& child : obj->AsNode()->GetChildren()) {
+            if (child) CullAlphaGeometryRecursive(child.get());
+        }
+    }
+}
+
+static void FadeAlphaGeometryRecursive(RE::NiAVObject* obj) {
+    if (!obj) return;
+
+    if (auto triShape = obj->AsTriShape()) {
+        auto& geomData = triShape->GetGeometryRuntimeData();
+        auto& prop = geomData.alphaProperty;
+        if (prop) {
+            triShape->fadeAmount = 0.5f;
+        }
+    }
+
+    if (obj->AsNode()) {
+        for (auto& child : obj->AsNode()->GetChildren()) {
+            if (child) FadeAlphaGeometryRecursive(child.get());
+        }
+    }
+}
+
+void ReferenceUpdater::RemoveLeavesSmooth(RE::TESObjectREFR* ref) {
     if (!ref) return;
 
+    auto NewModel = Utils::GetModelPath(ref->GetBaseObject());
+
+    auto DummyHazardTospawn = DummyHazards[DummyHazardIterator % DummyHazards.size()];
+    DummyHazardTospawn->model = NewModel;
+    DummyHazardIterator++;
+
+    RemoveLeaves(ref);
+    auto placedDummyRef = ref->PlaceObjectAtMe(DummyHazardTospawn, false);
+    if (!placedDummyRef) {
+        logger::error("RemoveLeavesSmooth: Failed to spawn Dummy ref");
+        return;
+    }
+    placedDummyRef->SetScale(ref->GetScale());
+    placedDummyRef->SetAngle(ref->GetAngle());
+    RemoveCollision(placedDummyRef.get());
+    RemoveStatic(placedDummyRef.get());
+    // ApplyDesintegrateFX(placedDummyRef->GetHandle());
+    TransformingData data;
+    data.refHandle = placedDummyRef->GetHandle();
+    FadingObjects.push_back(data);
+}
+
+void ReferenceUpdater::RemoveCollision(RE::TESObjectREFR* ref) {
+    if (ref->HasCollision()) {
+        ToggleRefCollision(ref, true);
+        ref->SetCollision(false);
+    }
+}
+
+void ReferenceUpdater::RemoveLeaves(RE::TESObjectREFR* ref) {
+    if (!ref) return;
     if (auto obj3d = ref->Get3D()) {
         CullAlphaGeometryRecursive(obj3d);
     }
 }
 
-
-void ReferenceUpdater::RemoveLeaves(RE::TESObjectREFR* ref) {
+void ReferenceUpdater::RemoveStatic(RE::TESObjectREFR* ref) {
     if (!ref) return;
-
-    // ToDo: Make it smooth
     if (auto obj3d = ref->Get3D()) {
-        CullAlphaGeometryRecursive(obj3d);
+        CullNonAlphaGeometryRecursive(obj3d);
     }
+}
+
+void ReferenceUpdater::SpawnSmokeAndDecal(RE::TESObjectREFR* ref) {
+    if (!ref) return;
+    static auto* WildfireMgr = WildfireMgr::GetSingleton();
+    WildfireMgr->ReferenceBurned(ref->GetPosition());
 }
