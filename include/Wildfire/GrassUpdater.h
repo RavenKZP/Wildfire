@@ -23,6 +23,7 @@ public:
 
     void RegenerateGrass();
     void RegenerateGrassInCell(RE::TESObjectCELL* cell);
+    void DarkenGrassShader(RE::TESObjectCELL* cell);
 
     void LazyCreateCellState(CellStateMapType& cellStateMap);
 
@@ -48,7 +49,6 @@ private:
     std::shared_mutex createCellStateMutex;
     std::queue<RE::TESObjectCELL*> createCellStateQueue;
 
-    // Queue of cells that need grass regen in the game world
     std::shared_mutex cellsToUpdateMutex;
-    std::set<RE::TESObjectCELL*> cellsToUpdate;
+    std::map<RE::TESObjectCELL*, CellState> cellsToUpdate;
 };

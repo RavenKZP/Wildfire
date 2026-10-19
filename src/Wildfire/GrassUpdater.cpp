@@ -28,7 +28,6 @@ bool GrassUpdater::StartUpdate(GrassEventType& events, CellStateMapType& cellSta
                                float delta) {
 
     static auto* set = Settings::GetSingleton();
-    static auto* DebugAPI = DebugAPI_IMPL::DebugAPI::GetSingleton();
 
     std::queue<RE::TESObjectCELL*> cellsToRemove;
     for (auto& [cell, state] : cellStateMap) {
@@ -50,6 +49,8 @@ bool GrassUpdater::StartUpdate(GrassEventType& events, CellStateMapType& cellSta
                 }
 
                 if (set->DebugMode && set->DrawLandscape && cell == RE::PlayerCharacter::GetSingleton()->GetParentCell()) {
+                    auto* DebugAPI = DebugAPI_IMPL::DebugAPI::GetSingleton();
+                    auto* tes = RE::TES::GetSingleton();
                     FireVertex fireVert{state.cellAsCoordinates, q, v};
                     auto p0 = fireVert.worldsPos;
                     auto p1 = p0;
@@ -60,6 +61,10 @@ bool GrassUpdater::StartUpdate(GrassEventType& events, CellStateMapType& cellSta
                     p2.y += VERTS_STEP / 2;
                     p3.x -= VERTS_STEP / 2;
                     p4.y -= VERTS_STEP / 2;
+                    tes->GetLandHeight(RE::NiPoint3{p1.x, p1.y, 0.0f}, p1.z);
+                    tes->GetLandHeight(RE::NiPoint3{p2.x, p2.y, 0.0f}, p2.z);
+                    tes->GetLandHeight(RE::NiPoint3{p3.x, p3.y, 0.0f}, p3.z);
+                    tes->GetLandHeight(RE::NiPoint3{p4.x, p4.y, 0.0f}, p4.z);
 
                     RE::NiColorA colour{0.75f, 0.75f, 0.75f, 1};  // Gray
 
@@ -82,10 +87,9 @@ bool GrassUpdater::StartUpdate(GrassEventType& events, CellStateMapType& cellSta
             }
         }
         if (alteredFound) {
-            std::memcpy(cell->GetLandscape()->loadedData->colors, state.newColors, sizeof(state.newColors));
-            std::unique_lock cellsLock(cellsToUpdateMutex);
             logger::debug("Adding cell {:X} to update grass", cell->GetFormID());
-            cellsToUpdate.insert(cell);
+            std::unique_lock cellsLock(cellsToUpdateMutex);
+            cellsToUpdate.insert({cell, state});
         }
     }
     while (!cellsToRemove.empty()) {
@@ -140,7 +144,7 @@ CellStateMapType GrassUpdater::GrassUpdateLogic(GrassEventType grassEvents, Cell
                                                WeatherData wheatherData, float delta) {
     auto start = std::chrono::high_resolution_clock::now();
     auto* set = Settings::GetSingleton();
-    logger::info("Starting grass update with {} grassEvents, {} cells in cellStateMap and {} delta", grassEvents.size(),
+    logger::info("[Thread] Starting grass update with {} grassEvents, {} cells in cellStateMap and {} delta", grassEvents.size(),
                  cellStateMap.size(), delta);
 
     // Step 1 : Process each fire event and update the corresponding vertices in the cellStateMap
@@ -153,7 +157,6 @@ CellStateMapType GrassUpdater::GrassUpdateLogic(GrassEventType grassEvents, Cell
         auto damage = event.damage;
         if (radius > (VERTS_STEP / 2)) {
             auto NearestVertexs = FindNearestVertexsInRadius(position, radius);
-            logger::debug("Applying fire event to {} vertexs within radius {}", NearestVertexs.size(), radius);
             for (const auto& vertex : NearestVertexs) {
                 auto cell = Utils::GetCellByCoords(vertex.cell);
                 if (!cell) {
@@ -228,8 +231,10 @@ CellStateMapType GrassUpdater::GrassUpdateLogic(GrassEventType grassEvents, Cell
         }
     }
     auto afterEvents = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double, std::milli> elapsed = afterEvents - start;
-    logger::info("Processed {} fire grassEvents in {} ms", grassEvents.size(), elapsed.count());
+    if (set->EnableTimeLogging) {
+        std::chrono::duration<double, std::milli> elapsed = afterEvents - start;
+        logger::info("[Thread] Processed {} fire grassEvents in {} ms", grassEvents.size(), elapsed.count());
+    }
 
     // Step 2 : Simulate fire spread and cooling for each vertex in the cellStateMap
     auto* TaskInterface = SKSE::GetTaskInterface();
@@ -247,14 +252,16 @@ CellStateMapType GrassUpdater::GrassUpdateLogic(GrassEventType grassEvents, Cell
                     RE::NiPoint3 pos = targetVertex.worldsPos;
                     float heat = state.heat[q][v] - state.usedHeat[q][v];
                     TaskInterface->AddTask([cell, pos, heat]() {
+                        auto* set = Settings::GetSingleton();
                         if (cell) {
-                            cell->ForEachReferenceInRange(pos, VERTS_STEP * 2.0f, [pos, heat](RE::TESObjectREFR* ref) {
+                            cell->ForEachReferenceInRange(pos, VERTS_STEP * 2.0f, [pos, heat, set](RE::TESObjectREFR* ref) {
                                 if (ref) {
                                     auto* wildfireMgr = WildfireMgr::GetSingleton();
                                     if (Utils::IsSupportedForm(ref)) {
                                         auto refPos = ref->GetPosition();
                                         auto distance = pos.GetDistance(refPos);
-                                        float adjusted_damage = heat * (distance / VERTS_STEP * 2.0f);
+                                        float adjusted_damage =
+                                            heat * (distance / VERTS_STEP * 2.0f) * set->FireDamageMultiplayer;
                                         wildfireMgr->AddRefEvent(ref, adjusted_damage,
                                                                                  ElementType::Fire);
                                     }
@@ -314,7 +321,7 @@ CellStateMapType GrassUpdater::GrassUpdateLogic(GrassEventType grassEvents, Cell
                     state.fuel[q][v] -= set->FuelConsumptionRate * delta;
                     // Heat increases as fuel burns
                     state.heat[q][v] =
-                        std::min(state.heat[q][v] + (set->FuelConsumptionRate * set->FuelToHeatRate * delta),
+                        std::min(state.heat[q][v] + (set->FuelConsumptionRate * set->FuelToHeatRate * set->FireDamageMultiplayer * delta),
                                  set->DefaultMaxGrassHeat);
                     state.altered[q][v] = true;
 
@@ -322,6 +329,12 @@ CellStateMapType GrassUpdater::GrassUpdateLogic(GrassEventType grassEvents, Cell
                     if (state.fuel[q][v] <= 0.0f) {
                         state.isBurning[q][v] = false;
                         state.isCharred[q][v] = true;
+                        if (v % set->DecalSpacing == 0) {
+                            auto pos = targetVertex.worldsPos;
+                            SKSE::GetTaskInterface()->AddTask([pos]() { 
+                                WildfireMgr::GetSingleton()->GrassBurned(pos); });
+                        }
+
                     }
                 } else if (state.heat[q][v] > 0.0f) {
                     // Cool down the fire cell if not burning
@@ -340,8 +353,10 @@ CellStateMapType GrassUpdater::GrassUpdateLogic(GrassEventType grassEvents, Cell
         }
     }
     auto afterSpread = std::chrono::high_resolution_clock::now();
-    elapsed = afterSpread - afterEvents;
-    logger::info("Simulated fire spread and cooling in {} ms", elapsed.count());
+    if (set->EnableTimeLogging) {
+        std::chrono::duration<double, std::milli> elapsed = afterSpread - afterEvents;
+        logger::info("[Thread] Simulated fire spread and cooling in {} ms", elapsed.count());
+    }
 
     // Step 3 : Update colors for altered vertices in the cellStateMap based on their new state (burning, charred, etc.)
     // to be applied later in the main thread
@@ -356,8 +371,11 @@ CellStateMapType GrassUpdater::GrassUpdateLogic(GrassEventType grassEvents, Cell
                     uint8_t colorValue = 255;
 
                     float maxDarkenByHeat = 0.5f;
-
-                    if (state.isBurning[q][v] || state.isCharred[q][v]) {
+                    if (state.isCharred[q][v]) {
+                        // max dark and lower the grass to make it shorter
+                        colorValue = static_cast<uint8_t>((255 * maxDarkenByHeat) - (255 * maxDarkenByHeat));
+                        state.newHeights[q][v] = state.originalHeights[q][v] - set->GrassHeightDecrease;
+                    } else if (state.isBurning[q][v]) {
                         // Darken based on fuel amount (the less fuel, the darker)
                         float fuelRatio = state.fuel[q][v] / set->DefaultGrassFuel;
                         colorValue = static_cast<uint8_t>((255 * maxDarkenByHeat) -
@@ -381,10 +399,12 @@ CellStateMapType GrassUpdater::GrassUpdateLogic(GrassEventType grassEvents, Cell
         }
     }
     auto afterColor = std::chrono::high_resolution_clock::now();
-    elapsed = afterColor - afterSpread;
-    logger::info("Updated vertex colors in {} ms", elapsed.count());
-    elapsed = afterColor - start;
-    logger::info("Total grass update logic time: {} ms", elapsed.count());
+    if (set->EnableTimeLogging) {
+        std::chrono::duration<double, std::milli> elapsed = afterColor - afterSpread;
+        logger::info("[Thread] Updated vertex colors and heights in {} ms", elapsed.count());
+        elapsed = afterColor - start;
+        logger::info("[Thread] Total grass update logic time: {} ms", elapsed.count());
+    }
 
     return cellStateMap;
 }
@@ -570,7 +590,7 @@ std::vector<WeightedNeighbour> GrassUpdater::GetFireVertexNeighboursWeighted(con
     std::vector<FireVertex> neighbours = GetFireVertexNeighbours(vertex);
     if (neighbours.size() != 8) {
         // Unexpected
-        for (auto neigh : neighbours) {
+        for (auto& neigh : neighbours) {
             WeightedNeighbour wn{neigh, 1.0f};
             result.push_back(wn);
         }
@@ -653,19 +673,38 @@ void GrassUpdater::LazyCreateCellState(CellStateMapType& cellStateMap) {
 }
 
 void GrassUpdater::RegenerateGrass() {
+    auto start = std::chrono::high_resolution_clock::now();
+    static auto* set = Settings::GetSingleton();
     std::unique_lock lock(cellsToUpdateMutex);
 
     if (!cellsToUpdate.empty()) {  // One cell per frame
-        logger::debug("cells To Update {} ", cellsToUpdate.size());
+        logger::debug("Cells To Update {} ", cellsToUpdate.size());
         auto it = cellsToUpdate.begin();
-        RE::TESObjectCELL* cellToApply = *it;
+        RE::TESObjectCELL* cellToApply = it->first;
+        CellState& state = it->second;
         logger::debug("Regenerate Grass In Cell {:X} ", cellToApply->GetFormID());
         cellsToUpdate.erase(it);
         lock.unlock();
 
         if (cellToApply) {
+            auto land = cellToApply->GetLandscape();
+            if (land) {
+                std::memcpy(land->loadedData->colors, state.newColors, sizeof(state.newColors));
+                std::memcpy(land->loadedData->heights, state.newHeights, sizeof(state.newHeights));
+            }
             RegenerateGrassInCell(cellToApply);
+            
+            if (land) {
+                std::memcpy(land->loadedData->colors, state.originalColors, sizeof(state.originalColors));
+                std::memcpy(land->loadedData->heights, state.originalHeights, sizeof(state.originalHeights));
+            }
+            
         }
+    }
+    if (set->EnableTimeLogging) {
+        auto end = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double, std::milli> elapsed = end - start;
+        logger::info("RegenerateGrass took {} ms", elapsed.count());
     }
 }
 
@@ -674,13 +713,40 @@ void GrassUpdater::RegenerateGrass() {
 void GrassUpdater::RegenerateGrassInCell(RE::TESObjectCELL* cell) {
     if (cell && cell->IsAttached()) {
         auto grassMgr = RE::BGSGrassManager::GetSingleton();
+        //DarkenGrassShader(cell);
+
         std::uint8_t flag = 0;  // Has to be 0, its something like cancel flag...
         REL::Relocation<std::uint8_t*> GrassFadeFlag{REL::RelocationID(501130, 359446)};
         *GrassFadeFlag = false;  // This disable grass fade-in effect, so grass pop in imidietally
+
         grassMgr->RemoveGrassInCell(cell);
         grassMgr->CreateGrassInCell(cell, &flag);  // flag is something like cancel flag if true no grass is generated
-        grassMgr->ExecuteAllGrassTasks(cell, 0);   // actually apply grass to scene?
+        grassMgr->ExecuteAllGrassTasks(cell, 0);  // actually apply grass to scene?
                                                    // 2'nd argument is just set to 1 internally (no matter what we pass)
-        cell->GetRuntimeData().cellLand->SetAltered(true);
+
+        //cell->GetRuntimeData().cellLand->SetAltered(true);
+        
+    }
+}
+
+void GrassUpdater::DarkenGrassShader(RE::TESObjectCELL* cell) {
+    auto cellGrassData = cell->extraList.GetByType(RE::ExtraDataType::kCellGrassData);
+    if (cellGrassData) {
+        auto grassData = static_cast<RE::ExtraCellGrassData*>(cellGrassData);
+        for (auto grassHandler : grassData->grassHandles) {
+            if (grassHandler) {
+
+                auto* ms = static_cast<RE::BSMultiStreamInstanceTriShape*>(grassHandler->triShape.get());
+
+                auto& rt = ms->GetMultiStreamTrishapeRuntimeData();
+                ms->SetMaterialNeedsUpdate(true);
+
+                RE::NiUpdateData updData;
+                updData.flags = RE::NiUpdateData::Flag::kNone;
+                updData.time = 0.0f;
+                grassHandler->triShape->UpdateTransformAndBounds(updData);
+
+            }
+        }
     }
 }
