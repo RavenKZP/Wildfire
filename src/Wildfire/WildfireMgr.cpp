@@ -9,44 +9,24 @@
 #include "Settings.h"
 #include "Utils.h"
 
-WildfireMgr::WildfireMgr() {
-    auto ref = RE::TESDataHandler::GetSingleton()->LookupForm(0x097, "Wildfire.esp");
-    if (!ref) {
-        logger::error("Wildfire_SpiritRef not found. Please make sure Wildfire.esp is active");
-    }
-    auto actor = ref ? ref->As<RE::Actor>() : nullptr;
-    Wildfire_Spirit = actor;
-
-    if (Wildfire_Spirit) {
-        auto* spell = RE::TESForm::LookupByID<RE::SpellItem>(0x012FD0);  // Firebolt
-        RE::ActorEquipManager::GetSingleton()->EquipSpell(Wildfire_Spirit, spell);
-
-    } else {
-        logger::error("Wildfire Spirit not found. Please make sure Wildfire.esp is active");
-        RE::DebugMessageBox("Wildfire Error: Wildfire Spirit not found. Please make sure Wildfire.esp is active");
-    }
+WildfireMgr::WildfireMgr() { 
+    auto* set = Settings::GetSingleton();
+    SetHazardsLifetine(set->HazardPeriodicUpdateTime);
 }
 
 void WildfireMgr::OnGameLoad() {
     // Internal Grass Cleanup
     {
-        std::unique_lock lock(cellStateMutex);
+        std::lock_guard lock(cellStateMutex);
         for (auto& [cell, state] : cellStateMap) {
             if (cell && cell->IsAttached()) {
-                if (auto* cellLand = cell->GetLandscape()) {
-                    if (auto* loadedData = cellLand->loadedData) {
-                        if (auto* colors = loadedData->colors) {
-                            std::memcpy(colors, state.originalColors, sizeof(state.originalColors));
-                            SKSE::GetTaskInterface()->AddTask([this, cell]() { grassUpdater.RegenerateGrassInCell(cell); });
-                        }
-                    }
-                }
+                SKSE::GetTaskInterface()->AddTask([this, cell]() { grassUpdater.RegenerateGrassInCell(cell); });
             }
         }
         cellStateMap.clear();
     }
     {
-        std::unique_lock lock(grassEventMutex);
+        std::lock_guard lock(grassEventMutex);
         grassEventQueue.clear();
     }
 
@@ -57,19 +37,11 @@ void WildfireMgr::OnGameLoad() {
 
     // Internal Refs Cleanup
     {
-        std::unique_lock lock(refStateMutex);
-        for (auto& [refHandle, state] : refStateMap) {
-            auto ref = refHandle.get().get();
-            if (ref) {
-                if (auto a3D = ref->Get3D()) {
-                    a3D->CullGeometry(false);
-                }
-            }
-        }
+        std::lock_guard lock(refStateMutex);
         refStateMap.clear();
     }
     {
-        std::unique_lock lock(refEventMutex);
+        std::lock_guard lock(refEventMutex);
         refEventQueue.clear();
     }
 
@@ -84,7 +56,7 @@ void WildfireMgr::OnGameLoad() {
         ignore_next_ref_res = true;
     }
 
-    // External Cleanups
+    // Modules Cleanups
     hazardUpdater.OnGameLoad();
     grassUpdater.OnGameLoad();
     refUpdater.OnGameLoad();
@@ -95,9 +67,6 @@ void WildfireMgr::OnGameLoad() {
     //      grassEventQueue
     //      refEventQueue
     // from SKSE's serialization system
-
-    auto* spell = RE::TESForm::LookupByID<RE::SpellItem>(0x012FD0);  // Firebolt
-    RE::ActorEquipManager::GetSingleton()->EquipSpell(Wildfire_Spirit, spell);
 }
 
 void WildfireMgr::OnGameSave() {
@@ -112,12 +81,12 @@ void WildfireMgr::OnGameSave() {
 }
 
 CellStateMapType WildfireMgr::GetCellStateMapCopy() {
-    std::shared_lock lock(cellStateMutex);
+    std::lock_guard lock(cellStateMutex);
     return cellStateMap;
 }
 
 RefStateMapType WildfireMgr::GetRefStateMapCopy() {
-    std::shared_lock lock(refStateMutex);
+    std::lock_guard lock(refStateMutex);
     return refStateMap;
 }
 
@@ -128,7 +97,7 @@ bool WildfireMgr::GrassUpdate(float delta) {
             if (ignore_next_grass_res) {
                 ignore_next_grass_res = false;
             } else {
-                std::unique_lock lock(cellStateMutex);
+                std::lock_guard lock(cellStateMutex);
                 for (auto& [cell, state] : *result) {
                     cellStateMap.insert_or_assign(cell, state);
                 }
@@ -137,12 +106,12 @@ bool WildfireMgr::GrassUpdate(float delta) {
         }
         GrassEventType eventsToProcess;
         {
-            std::unique_lock lock(grassEventMutex);
+            std::lock_guard lock(grassEventMutex);
             eventsToProcess.swap(grassEventQueue);
         }
         auto weatherData = Weather::GetWeatherData();
 
-        std::unique_lock lock(cellStateMutex);
+        std::lock_guard lock(cellStateMutex);
         return grassUpdater.StartUpdate(eventsToProcess, cellStateMap, weatherData, delta);
     } else {
         return false;  // Still running, can't start a new update
@@ -166,7 +135,6 @@ void WildfireMgr::HazardUpdate() {
     } else {
         logger::warn("Hazard update still running, spawning on previous positions");
     }
-    hazardUpdater.SpawnHazards();
 }
 
 void WildfireMgr::SetHazardsLifetine(float lifetime) { hazardUpdater.SetHazardsLifetine(lifetime); }
@@ -178,7 +146,7 @@ bool WildfireMgr::RefUpdate(float delta) {
             if (ignore_next_ref_res) {
                 ignore_next_ref_res = false;
             } else {
-                std::unique_lock lock(refStateMutex);
+                std::lock_guard lock(refStateMutex);
                 for (auto& [ref, state] : *result) {
                     refStateMap.insert_or_assign(ref, state);
                 }
@@ -187,22 +155,32 @@ bool WildfireMgr::RefUpdate(float delta) {
         }
         RefEventType eventsToProcess;
         {
-            std::unique_lock lock(refEventMutex);
+            std::lock_guard lock(refEventMutex);
             eventsToProcess.swap(refEventQueue);
         }
         auto weatherData = Weather::GetWeatherData();
-        std::unique_lock lock(refStateMutex);
+        std::lock_guard lock(refStateMutex);
         return refUpdater.StartUpdate(eventsToProcess, refStateMap, weatherData, delta);
     } else {
         return false;  // Still running, can't start a new update
     }
 }
 
+static void LogPeriodicUpdateTime(std::chrono::steady_clock::time_point start) { 
+    static auto* set = Settings::GetSingleton(); 
+    if (set->EnableTimeLogging) {
+        auto end = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double, std::milli> elapsed = end - start;
+        logger::info("Whole WildfireMgr::PeriodicUpdate took {} ms", elapsed.count());
+    }
+}
+
 void WildfireMgr::PeriodicUpdate(float delta) {
-    auto* set = Settings::GetSingleton();
+    static auto* set = Settings::GetSingleton();
     if (set->ModActive == false) {
         return;  // Mod is disabled, skip all processing
     }
+    auto start = std::chrono::high_resolution_clock::now();
 
     static float grassTimer = 0.0f;
     static float hazardTimer = 0.0f;
@@ -212,12 +190,42 @@ void WildfireMgr::PeriodicUpdate(float delta) {
     hazardTimer += delta;
     refTimer += delta;
 
+    if (set->DebugMode && set->DrawWind) {
+        static auto* DebugAPI = DebugAPI_IMPL::DebugAPI::GetSingleton();
+        static auto* player = RE::PlayerCharacter::GetSingleton();
+        static float windTimer = 0.0f;
+        windTimer += delta;
+        if (windTimer >= set->DebugDrawDuration/1000.0f) {
+            windTimer = 0.0f;
+            auto weatherData = Weather::GetWeatherData();
+            float windAngle = weatherData.windData.direction;
+            auto p0 = player->GetPosition();
+
+            float length = 500.0f;
+
+            RE::NiPoint3 dir{std::cos(windAngle) * length, std::sin(windAngle) * length, 50.0f};
+            RE::NiPoint3 p1 = p0 + dir;
+
+            auto precipDir = RE::Sky::GetSingleton()->precip->GetDirection();
+            precipDir.x *= length;
+            precipDir.y *= length;
+            precipDir.z += 50;
+            RE::NiPoint3 p2 = p0 + precipDir;
+
+            DebugAPI->DrawLineForMS(p0, p1, set->DebugDrawDuration, {0, 1, 0, 1}, 1);
+            DebugAPI->DrawLineForMS(p0, p2, set->DebugDrawDuration, {1, 0, 0, 1}, 1);
+        }
+    }
+
+    hazardUpdater.ManageHazards();
+    refUpdater.TransformObjects(delta);
+
     if (cellStateMap.empty() && refStateMap.empty()) {
         hazardTimer = set->HazardPeriodicUpdateTime;
     } else if (hazardTimer >= set->HazardPeriodicUpdateTime) {
         hazardTimer = 0.0f;
         HazardUpdate();
-        return;
+        return LogPeriodicUpdateTime(start);
     }
 
     if (cellStateMap.empty() && grassEventQueue.empty()) {
@@ -225,7 +233,7 @@ void WildfireMgr::PeriodicUpdate(float delta) {
     } else if (grassTimer >= set->GrassPeriodicUpdateTime) {
         if (GrassUpdate(grassTimer)) {
             grassTimer = 0.0f;
-            return;
+            return LogPeriodicUpdateTime(start);
         } else {
             static int consecutiveRuns = 0;
             consecutiveRuns++;
@@ -244,7 +252,7 @@ void WildfireMgr::PeriodicUpdate(float delta) {
     } else if (refTimer >= set->RefPeriodicUpdateTime) {
         if (RefUpdate(refTimer)) {
             refTimer = 0.0f;
-            return;
+            return LogPeriodicUpdateTime(start);
         } else {
             static int consecutiveRuns = 0;
             consecutiveRuns++;
@@ -259,14 +267,16 @@ void WildfireMgr::PeriodicUpdate(float delta) {
     }
 
     grassUpdater.RegenerateGrass();
+    return LogPeriodicUpdateTime(start);
 }
 
 void WildfireMgr::AddGrassEvent(const RE::NiPoint3& impactPos, float radius, float damage, ElementType type) {
     static auto* set = Settings::GetSingleton();
 
-    if (type != ElementType::Shock && type != ElementType::Neutral) {  // Shock can't affect grass
+    if (type != ElementType::Shock && type != ElementType::Neutral &&
+        type != ElementType::Unknown) {  // Shock can't affect grass
         {
-            std::unique_lock lock(grassEventMutex);
+            std::lock_guard lock(grassEventMutex);
             grassEventQueue.emplace_back(impactPos, radius, damage, type);
         }
         RE::TES::GetSingleton()->ForEachCellInRange(impactPos, radius, [this](RE::TESObjectCELL* cell) {
@@ -299,13 +309,20 @@ void WildfireMgr::AddGrassEvent(const RE::NiPoint3& impactPos, float radius, flo
 }
 
 void WildfireMgr::AddRefEvent(RE::TESObjectREFR* ref, float damage, ElementType type) {
+    if (!ref) {
+        return;
+    }
+    if (ref->IsDisabled() || ref->IsDestroyed()) {
+        return;
+    }
+
     static auto* set = Settings::GetSingleton();
 
     if (ref && Utils::IsSupportedForm(ref)) {
-        if (type != ElementType::Neutral) {
+        if (type != ElementType::Neutral && type != ElementType::Unknown) {
             auto refHandle = ref->GetHandle();
             {
-                std::unique_lock lock(refEventMutex);
+                std::lock_guard lock(refEventMutex);
                 refEventQueue.emplace_back(refHandle, damage, type);
             }
             refUpdater.GetOrCreateRefState(refStateMap, ref->GetHandle());
@@ -340,14 +357,11 @@ void WildfireMgr::SendHitEvent(RE::TESObjectREFR* ref) {
     if (ref) {
         // If is supported by OIF
         if (Utils::IsOIFSupported(ref)) {
-            static auto* player = RE::PlayerCharacter::GetSingleton();
-            logger::debug("Sending HitEvent for {:X} Name: {}", ref->GetFormID(), ref->GetName());
-            static RE::TESHitEvent event(ref, player, 0x012FCD, 0x012FCF, RE::TESHitEvent::Flag::kNone);
+            static RE::TESHitEvent event(ref, nullptr, 0x012FCD, 0x012FCF, RE::TESHitEvent::Flag::kNone);
             RE::ScriptEventSourceHolder::GetSingleton()->SendEvent(&event);
         }
         if (Utils::IsPapyrusSupported(ref)) {
-            
-
+            /*
             static RE::TESObjectREFR* aggressor = nullptr;
             static RE::TESForm* source = RE::TESForm::LookupByEditorID("Flames");
             static auto projectileForm = RE::TESForm::LookupByEditorID("FlamesProjectile");
@@ -358,10 +372,21 @@ void WildfireMgr::SendHitEvent(RE::TESObjectREFR* ref) {
             static bool bashAttack = false;
             static bool hitBlocked = false;
 
-            //SendPapyrusEvent(ref, "OnHit", aggressor, source, projectile, false, false, false, false);
+            SendPapyrusEvent(ref, "OnHit", aggressor, source, projectile, false, false, false, false);
+            */
 
         }
     }
+}
+
+void WildfireMgr::ReferenceBurned(const RE::NiPoint3& position) {
+    hazardUpdater.SpawnSmokeHazardAt(position);
+    decalUpdater.SpawnBurnDecalAtPosition(position);
+}
+
+void WildfireMgr::GrassBurned(const RE::NiPoint3& position) {
+    hazardUpdater.SpawnSmokeHazardAt(position);
+    decalUpdater.SpawnBurnDecalAtPosition(position);
 }
 
 void WildfireMgr::SetHazardsPCOnly(bool PCOnly) { hazardUpdater.SetHazardsPCOnly(PCOnly); }
