@@ -14,16 +14,16 @@ public:
     void SaveSettings() const;  // Save settings to file
     void ResetSettings();       // Restore default and save to file
 
+    void SaveCustomRefConfigs(const std::unordered_map<RE::FormID, RefConfig>& configs);
 
     // Grass and Refs
     std::unordered_map<RE::FormID, GrassConfig> grassConfig;
     std::unordered_map<RE::FormID, RefConfig> refsConfig;
+    std::unordered_set<RE::FormID> customRefsConfig;
     std::unordered_set<RE::FormID> excludedTrees;
 
-    // Sources
-    std::unordered_map<RE::FormID, ElementType> sourceForms;
-
     // String configs
+    std::vector<std::string> neutralSources;
     std::vector<std::string> fireSources;
     std::vector<std::string> shockSources;
     std::vector<std::string> coldSources;
@@ -33,11 +33,15 @@ public:
     bool ModActive = true;
 
     // Debug
+    bool EnableTimeLogging = true;
     bool DebugMode = false;  // Enable debug mode (visuals)
     bool DrawImpacts = true;
     bool DrawLandscape = true;
     bool DrawBoundBoxes = true;
     bool DrawHazards = true;
+    bool DrawHazardsMovement = false;
+    bool DrawDecals = true;
+    bool DrawWind = true;
     int DebugDrawDuration = 1000;  // Duration for debug drawings in miliseconds
 
     // Timers
@@ -51,12 +55,25 @@ public:
     float DefaultMaxGrassHeat = 100.0f;      // Max heat grass can have
     float DefaultMinGrassHeat = -50.0f;      // Min heat grass can have
     uint8_t MinGrassColorValue = 45;         // Minimum color value for grass vertices to
+    float GrassHeightDecrease = 25.0f;
 
     // Refs
     float DefaultRefIgnitionHeat = 50.0f;  // Minimum heat required for a cell to start burning
     float DefaultRefFuel = 50.0f;          // Initial fuel amount for each vertex
     float DefaultMaxRefHeat = 250.0f;      // Max heat ref can have
     float DefaultMinRefHeat = -100.0f;     // Min heat ref can have
+    float UnderwaterRatio = 0.5f;          // How much objects are underwater to be considered underwater
+    float FuelRecoveryRate = 1.0f;         // Rate at which fuel recovers per second for non-burning cells
+
+    // Hazards
+    int MaxHazardSpawn = 25;  // Maximum hazards to spawn per type (4 types: Large, Big, Medium, Small)
+    int MaxSmokeHazards = 25;  // Maximum smoke hazards to spawn
+    bool HazardAffectPCOnly = true;
+
+    // Decals
+    float MinDacalSize = 500.0f;
+    float MaxDacalSize = 650.0f;
+    int DecalSpacing = 5;
 
     // Fire spreading
     float HeatDistributionFactor = 10.0f;  // Higher number = slower distribution
@@ -73,11 +90,7 @@ public:
     float WaterDamageMultiplayer = 1.0f;  // Multiplier for damage from projectiles
 
     // Wheather
-    float RainingFactor = 0.60f;   // Factor to reduce fire spread when raining
+    float RainingFactor = 0.50f;   // Factor to reduce fire spread when raining
     float SnowingFactor = 0.75f;   // Factor to reduce fire spread when snowing
     float WindSpeedFactor = 2.0f;  // Factor to influence fire spread based on wind speed
-
-    // Hazards
-    int MaxHazardSpawn = 25;  // Maximum hazards to spawn
-    bool HazardAffectPCOnly = true;
 };
