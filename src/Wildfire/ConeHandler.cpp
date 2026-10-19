@@ -4,39 +4,31 @@
 #include "Utils.h"
 #include "Types.h"
 
-// To be removed in release builds
-#include "CLibUtilsQTR/DrawDebug.hpp"
-
-std::unordered_map<RE::Projectile*, float> lastProcessTime;
-
 void WildfireMgr::ProcessCone(RE::Projectile* a_proj) {
     if (!a_proj) {
         return;
     }
     auto start = std::chrono::high_resolution_clock::now();
-
-    auto& runtime = a_proj->GetProjectileRuntimeData();
-    float now = runtime.livingTime;
-    constexpr float interval = 0.5f;
-    auto it = lastProcessTime.find(a_proj);
-    if (it != lastProcessTime.end()) {
-        if (now - it->second < interval) {
-            return;
-        }
-        it->second = now;
-    } else {
-        lastProcessTime[a_proj] = now;
+    auto type = Utils::GetProjectileType(a_proj);
+    if (type == ElementType::Unknown || type == ElementType::Neutral) {
         return;
     }
 
-    if (lastProcessTime.size() > 32) {
-        for (auto it2 = lastProcessTime.begin(); it2 != lastProcessTime.end();) {
-            if (!it2->first || it2->first->IsDestroyed()) {
-                it2 = lastProcessTime.erase(it2);
-            } else {
-                ++it2;
-            }
+    auto& runtimeData = a_proj->GetProjectileRuntimeData();
+    float now = runtimeData.livingTime;
+    float interval = 0.5f;
+    auto projFormID = a_proj->GetFormID();
+    
+    auto projUpd = Utils::ProjectileUpdate::GetSingleton();
+    auto lastProcessTime = projUpd->Get(projFormID);
+    if (lastProcessTime > 0) {
+        if (now - lastProcessTime < interval) {
+            return;
+        } else {
+            projUpd->Update(projFormID, now);
         }
+    } else {
+        projUpd->Add(projFormID, now);
     }
 
     auto pos = a_proj->GetPosition();
@@ -46,7 +38,6 @@ void WildfireMgr::ProcessCone(RE::Projectile* a_proj) {
 
     static auto* set = Settings::GetSingleton();
     float adj_damage = base_damage;
-    auto type = Utils::GetProjectileType(a_proj);
     switch (type) {
         case ElementType::Fire:
             adj_damage = base_damage * set->FireDamageMultiplayer;
@@ -71,7 +62,14 @@ void WildfireMgr::ProcessCone(RE::Projectile* a_proj) {
                                                          }
                                                          return RE::BSContainer::ForEachResult::kContinue;
                                                      });
-    auto end = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double, std::milli> elapsed = end - start;
-    logger::debug("Process Cone adj_damage {} took {} ms", adj_damage, elapsed.count());
+    if (set->EnableTimeLogging) {
+        auto end = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double, std::milli> elapsed = end - start;
+        logger::info("Process Cone adj_damage {} took {} ms", adj_damage, elapsed.count());
+    }
+}
+
+void WildfireMgr::RemoveCone(RE::Projectile* a_projectile) {
+    auto projUpd = Utils::ProjectileUpdate::GetSingleton();
+    projUpd->Remove(a_projectile->GetFormID());
 }

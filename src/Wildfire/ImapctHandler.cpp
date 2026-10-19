@@ -8,11 +8,33 @@ void WildfireMgr::ProcessImpact(RE::Projectile* a_proj, RE::TESObjectREFR* a_ref
         return;
     }
     auto start = std::chrono::high_resolution_clock::now();
+    auto type = Utils::GetProjectileType(a_proj);
+    if (type == ElementType::Unknown || type == ElementType::Neutral) {
+        return;
+    }
+
+    auto& runtimeData = a_proj->GetProjectileRuntimeData();
+    float now = runtimeData.livingTime;
+    float interval = 1.0f;
+    auto projFormID = a_proj->GetFormID();
+
+    auto projUpd = Utils::ProjectileUpdate::GetSingleton();
+    auto lastProcessTime = projUpd->Get(projFormID);
+    if (lastProcessTime > 0) {
+        if (now - lastProcessTime < interval) {
+            return;
+        } else {
+            projUpd->Update(projFormID, now);
+        }
+    } else {
+        projUpd->Add(projFormID, now);
+    }
+    
+
     auto base_damage = Utils::GetDamageFromProjectile(a_proj);
 
     static auto* set = Settings::GetSingleton();
     float adj_damage = base_damage;
-    auto type = Utils::GetProjectileType(a_proj);
     switch (type) {
         case ElementType::Fire:
             adj_damage = base_damage * set->FireDamageMultiplayer;
@@ -40,7 +62,14 @@ void WildfireMgr::ProcessImpact(RE::Projectile* a_proj, RE::TESObjectREFR* a_ref
                                                          }
                                                          return RE::BSContainer::ForEachResult::kContinue;
                                                      });
-    auto end = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double, std::milli> elapsed = end - start;
-    logger::debug("Process Impact adj_damage {} took {} ms", adj_damage,  elapsed.count());
+    if (set->EnableTimeLogging) {
+        auto end = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double, std::milli> elapsed = end - start;
+        logger::info("Process Impact adj_damage {} took {} ms", adj_damage, elapsed.count());
+    }
+}
+
+void WildfireMgr::RemoveProjectile(RE::Projectile* a_projectile) {
+    auto projUpd = Utils::ProjectileUpdate::GetSingleton();
+    projUpd->Remove(a_projectile->GetFormID());
 }

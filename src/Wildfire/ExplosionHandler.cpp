@@ -3,14 +3,19 @@
 #include "Utils.h"
 #include "Settings.h"
 
-void WildfireMgr::ProcessExplosion(RE::Explosion* exp) {
+void WildfireMgr::ProcessExplosion(RE::Explosion* a_explosion) {
     auto start = std::chrono::high_resolution_clock::now();
     static auto* set = Settings::GetSingleton();
-    if (!exp) {
+    if (!a_explosion) {
         return;
     }
-    auto pos = exp->GetPosition();
-    auto& explosionRuntimeData = exp->GetExplosionRuntimeData();
+    auto type = Utils::GetExplosionType(a_explosion);
+    if (type == ElementType::Unknown || type == ElementType::Neutral) {
+        return;
+    }
+
+    auto pos = a_explosion->GetPosition();
+    auto& explosionRuntimeData = a_explosion->GetExplosionRuntimeData();
     float radius = explosionRuntimeData.radius;
     if (radius < VERTS_STEP / 2) {
         radius = VERTS_STEP / 2;  // Minimum radius to ensure we affect at least the nearest vertex
@@ -22,7 +27,6 @@ void WildfireMgr::ProcessExplosion(RE::Explosion* exp) {
     }
 
     float adj_damage = base_damage;
-    auto type = Utils::GetExplosionType(exp);
     switch (type) {
         case ElementType::Fire:
             adj_damage = base_damage * set->FireDamageMultiplayer;
@@ -42,7 +46,7 @@ void WildfireMgr::ProcessExplosion(RE::Explosion* exp) {
         AddGrassEvent(pos, radius, adj_damage, type);
     }
 
-    RE::TES::GetSingleton()->ForEachReferenceInRange(exp, radius,
+    RE::TES::GetSingleton()->ForEachReferenceInRange(a_explosion, radius,
                                                      [this, adj_damage, pos, radius, type](RE::TESObjectREFR* ref) {
                                                          if (ref) {
                                                              auto refPos = ref->GetPosition();
@@ -52,8 +56,9 @@ void WildfireMgr::ProcessExplosion(RE::Explosion* exp) {
                                                          }
                                                          return RE::BSContainer::ForEachResult::kContinue;
                                                      });
-
-    auto end = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double, std::milli> elapsed = end - start;
-    logger::debug("Process Explosion: base_damage {}, radius {} took {} ms", adj_damage, radius, elapsed.count());
+    if (set->EnableTimeLogging) {
+        auto end = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double, std::milli> elapsed = end - start;
+        logger::info("Process Explosion: base_damage {}, radius {} took {} ms", adj_damage, radius, elapsed.count());
+    }
 }
