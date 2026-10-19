@@ -27,6 +27,7 @@ namespace Math {
 
         public:
             static RE::NiPoint3 Rotate(const RE::NiPoint3& A, const RE::NiPoint3& angles);
+            static RE::NiPoint3 Rotate(const RE::NiPoint3& A, const RE::NiMatrix3& angles);
 
             ~Geometry() = default;
             explicit Geometry(const RE::TESObjectREFR* obj);
@@ -43,4 +44,4 @@ namespace Math {
         RE::NiPoint3 intersectLine(const std::array<RE::NiPoint3, 3>& vertices,
                                    const RE::NiPoint3& outside_plane_point);
     };
-};
+}  // namespace Math
