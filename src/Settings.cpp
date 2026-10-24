@@ -168,7 +168,8 @@ static void LoadGrassConfigFile(const std::filesystem::path& path, std::unordere
         auto* form = GetFormFromString(formStr);
         if (!form) continue;
         auto config = ParseGrassConfig(entry);
-        config.EditorID = clib_util::editorID::get_editorID(form);
+        auto EditorID = clib_util::editorID::get_editorID(form);
+        config.EditorID = EditorID;
         configs[form->GetFormID()] = config;
     }
 }
@@ -315,11 +316,319 @@ void Settings::SaveCustomRefConfigs(const std::unordered_map<RE::FormID, RefConf
     file << root.dump(4);
 }
 
+void Settings::LoadIni() {
+    std::ifstream file("Data\\SKSE\\Plugins\\Wildfire.ini");
+    if (!file.is_open()) {
+        logger::error("INI not found");
+        return;
+    }
+
+    auto Trim = [](std::string value) {
+        const auto first = value.find_first_not_of(" \t\r\n");
+        if (first == std::string::npos) {
+            return std::string{};
+        }
+
+        const auto last = value.find_last_not_of(" \t\r\n");
+        return value.substr(first, last - first + 1);
+    };
+
+    auto ParseBool = [](const std::string& value, bool& result) {
+        const auto normalized = Utils::ToLower(value);
+
+        if (normalized == "true" || normalized == "1" || normalized == "yes") {
+            result = true;
+            return true;
+        }
+
+        if (normalized == "false" || normalized == "0" || normalized == "no") {
+            result = false;
+            return true;
+        }
+
+        return false;
+    };
+
+    std::string line;
+
+    while (std::getline(file, line)) {
+        line = Trim(line);
+
+        if (line.empty() || line[0] == '#' || line[0] == ';') {
+            continue;
+        }
+
+        const auto separator = line.find('=');
+        if (separator == std::string::npos) {
+            continue;
+        }
+
+        const auto key = Trim(line.substr(0, separator));
+        auto value = Trim(line.substr(separator + 1));
+
+        const auto comment = value.find_first_of("#;");
+        if (comment != std::string::npos) {
+            value = Trim(value.substr(0, comment));
+        }
+
+        try {
+            bool boolValue = false;
+
+            if (key == "bModActive" && ParseBool(value, boolValue)) {
+                ModActive = boolValue;
+            } else if (key == "bEnableTimeLogging" && ParseBool(value, boolValue)) {
+                EnableTimeLogging = boolValue;
+            } else if (key == "bDebugMode" && ParseBool(value, boolValue)) {
+                DebugMode = boolValue;
+            } else if (key == "bDrawImpacts" && ParseBool(value, boolValue)) {
+                DrawImpacts = boolValue;
+            } else if (key == "bDrawLandscape" && ParseBool(value, boolValue)) {
+                DrawLandscape = boolValue;
+            } else if (key == "bDrawBoundBoxes" && ParseBool(value, boolValue)) {
+                DrawBoundBoxes = boolValue;
+            } else if (key == "bDrawHazards" && ParseBool(value, boolValue)) {
+                DrawHazards = boolValue;
+            } else if (key == "bDrawHazardsMovement" && ParseBool(value, boolValue)) {
+                DrawHazardsMovement = boolValue;
+            } else if (key == "bDrawDecals" && ParseBool(value, boolValue)) {
+                DrawDecals = boolValue;
+            } else if (key == "bDrawWind" && ParseBool(value, boolValue)) {
+                DrawWind = boolValue;
+            } else if (key == "bHazardAffectPCOnly" && ParseBool(value, boolValue)) {
+                HazardAffectPCOnly = boolValue;
+            } else if (key == "iDebugDrawDuration") {
+                DebugDrawDuration = std::stoi(value);
+            } else if (key == "fGrassPeriodicUpdateTime") {
+                GrassPeriodicUpdateTime = std::stof(value);
+            } else if (key == "fHazardPeriodicUpdateTime") {
+                HazardPeriodicUpdateTime = std::stof(value);
+            } else if (key == "fRefPeriodicUpdateTime") {
+                RefPeriodicUpdateTime = std::stof(value);
+            } else if (key == "fDefaultGrassIgnitionHeat") {
+                DefaultGrassIgnitionHeat = std::stof(value);
+            } else if (key == "fDefaultGrassFuel") {
+                DefaultGrassFuel = std::stof(value);
+            } else if (key == "fDefaultMaxGrassHeat") {
+                DefaultMaxGrassHeat = std::stof(value);
+            } else if (key == "fDefaultMinGrassHeat") {
+                DefaultMinGrassHeat = std::stof(value);
+            } else if (key == "iMinGrassColorValue") {
+                MinGrassColorValue = static_cast<uint8_t>(std::stoi(value));
+            } else if (key == "fGrassHeightDecrease") {
+                GrassHeightDecrease = std::stof(value);
+            } else if (key == "fDefaultRefIgnitionHeat") {
+                DefaultRefIgnitionHeat = std::stof(value);
+            } else if (key == "fDefaultRefFuel") {
+                DefaultRefFuel = std::stof(value);
+            } else if (key == "fDefaultMaxRefHeat") {
+                DefaultMaxRefHeat = std::stof(value);
+            } else if (key == "fDefaultMinRefHeat") {
+                DefaultMinRefHeat = std::stof(value);
+            } else if (key == "fUnderwaterRatio") {
+                UnderwaterRatio = std::stof(value);
+            } else if (key == "fFuelRecoveryRate") {
+                FuelRecoveryRate = std::stof(value);
+            } else if (key == "iMaxHazardSpawn") {
+                MaxHazardSpawn = std::stoi(value);
+            } else if (key == "iMaxSmokeHazards") {
+                MaxSmokeHazards = std::stoi(value);
+            } else if (key == "fMinDacalSize") {
+                MinDacalSize = std::stof(value);
+            } else if (key == "fMaxDacalSize") {
+                MaxDacalSize = std::stof(value);
+            } else if (key == "iDecalSpacing") {
+                DecalSpacing = std::stoi(value);
+            } else if (key == "iDecalSamplingPoints") {
+                DecalSamplingPoints = std::stoi(value);
+            } else if (key == "fHeatDistributionFactor") {
+                HeatDistributionFactor = std::stof(value);
+            } else if (key == "fMaxHeatDistribution") {
+                MaxHeatDistribution = std::stof(value);
+            } else if (key == "fFuelConsumptionRate") {
+                FuelConsumptionRate = std::stof(value);
+            } else if (key == "fFuelToHeatRate") {
+                FuelToHeatRate = std::stof(value);
+            } else if (key == "fSelfHeatLoss") {
+                SelfHeatLoss = std::stof(value);
+            } else if (key == "fSelfColdLoss") {
+                SelfColdLoss = std::stof(value);
+            } else if (key == "fFireDamageMultiplayer") {
+                FireDamageMultiplayer = std::stof(value);
+            } else if (key == "fShockDamageMultiplayer") {
+                ShockDamageMultiplayer = std::stof(value);
+            } else if (key == "fColdDamageMultiplayer") {
+                ColdDamageMultiplayer = std::stof(value);
+            } else if (key == "fWaterDamageMultiplayer") {
+                WaterDamageMultiplayer = std::stof(value);
+            } else if (key == "fRainingFactor") {
+                RainingFactor = std::stof(value);
+            } else if (key == "fSnowingFactor") {
+                SnowingFactor = std::stof(value);
+            } else if (key == "fWindSpeedFactor") {
+                WindSpeedFactor = std::stof(value);
+            }
+        } catch (const std::exception& exception) {
+            logger::warn(
+                "Invalid value '{}' for INI setting '{}': {}",
+                value,
+                key,
+                exception.what());
+        }
+    }
+
+    logger::info("Settings read from INI");
+}
+
+void Settings::SaveIni() const {
+    std::ofstream file("Data\\SKSE\\Plugins\\Wildfire.ini");
+    if (!file.is_open()) {
+        logger::error("Failed to open INI for writing");
+        return;
+    }
+
+    file << "[General]\n";
+    file << "bModActive=" << (ModActive ? "True" : "False") << "\n\n";
+
+    file << "[Debug]\n";
+    file << "bEnableTimeLogging=" << (EnableTimeLogging ? "True" : "False") << "\n";
+    file << "bDebugMode=" << (DebugMode ? "True" : "False") << "\n";
+    file << "bDrawImpacts=" << (DrawImpacts ? "True" : "False") << "\n";
+    file << "bDrawLandscape=" << (DrawLandscape ? "True" : "False") << "\n";
+    file << "bDrawBoundBoxes=" << (DrawBoundBoxes ? "True" : "False") << "\n";
+    file << "bDrawHazards=" << (DrawHazards ? "True" : "False") << "\n";
+    file << "bDrawHazardsMovement=" << (DrawHazardsMovement ? "True" : "False") << "\n";
+    file << "bDrawDecals=" << (DrawDecals ? "True" : "False") << "\n";
+    file << "bDrawWind=" << (DrawWind ? "True" : "False") << "\n";
+    file << "iDebugDrawDuration=" << DebugDrawDuration << "\n\n";
+
+    file << "[Timers]\n";
+    file << "fGrassPeriodicUpdateTime=" << GrassPeriodicUpdateTime << "\n";
+    file << "fHazardPeriodicUpdateTime=" << HazardPeriodicUpdateTime << "\n";
+    file << "fRefPeriodicUpdateTime=" << RefPeriodicUpdateTime << "\n\n";
+
+    file << "[Grass]\n";
+    file << "fDefaultGrassIgnitionHeat=" << DefaultGrassIgnitionHeat << "\n";
+    file << "fDefaultGrassFuel=" << DefaultGrassFuel << "\n";
+    file << "fDefaultMaxGrassHeat=" << DefaultMaxGrassHeat << "\n";
+    file << "fDefaultMinGrassHeat=" << DefaultMinGrassHeat << "\n";
+    file << "iMinGrassColorValue=" << static_cast<int>(MinGrassColorValue) << "\n";
+    file << "fGrassHeightDecrease=" << GrassHeightDecrease << "\n\n";
+
+    file << "[Refs]\n";
+    file << "fDefaultRefIgnitionHeat=" << DefaultRefIgnitionHeat << "\n";
+    file << "fDefaultRefFuel=" << DefaultRefFuel << "\n";
+    file << "fDefaultMaxRefHeat=" << DefaultMaxRefHeat << "\n";
+    file << "fDefaultMinRefHeat=" << DefaultMinRefHeat << "\n";
+    file << "fUnderwaterRatio=" << UnderwaterRatio << "\n";
+    file << "fFuelRecoveryRate=" << FuelRecoveryRate << "\n\n";
+
+    file << "[Hazards]\n";
+    file << "iMaxHazardSpawn=" << MaxHazardSpawn << "\n";
+    file << "iMaxSmokeHazards=" << MaxSmokeHazards << "\n";
+    file << "bHazardAffectPCOnly=" << (HazardAffectPCOnly ? "True" : "False") << "\n\n";
+
+    file << "[Decals]\n";
+    file << "fMinDacalSize=" << MinDacalSize << "\n";
+    file << "fMaxDacalSize=" << MaxDacalSize << "\n";
+    file << "iDecalSpacing=" << DecalSpacing << "\n";
+    file << "iDecalSamplingPoints=" << DecalSamplingPoints << "\n\n";
+
+    file << "[FireSpreading]\n";
+    file << "fHeatDistributionFactor=" << HeatDistributionFactor << "\n";
+    file << "fMaxHeatDistribution=" << MaxHeatDistribution << "\n";
+    file << "fFuelConsumptionRate=" << FuelConsumptionRate << "\n";
+    file << "fFuelToHeatRate=" << FuelToHeatRate << "\n";
+    file << "fSelfHeatLoss=" << SelfHeatLoss << "\n";
+    file << "fSelfColdLoss=" << SelfColdLoss << "\n\n";
+
+    file << "[DamageMultipliers]\n";
+    file << "fFireDamageMultiplayer=" << FireDamageMultiplayer << "\n";
+    file << "fShockDamageMultiplayer=" << ShockDamageMultiplayer << "\n";
+    file << "fColdDamageMultiplayer=" << ColdDamageMultiplayer << "\n";
+    file << "fWaterDamageMultiplayer=" << WaterDamageMultiplayer << "\n\n";
+
+    file << "[Weather]\n";
+    file << "fRainingFactor=" << RainingFactor << "\n";
+    file << "fSnowingFactor=" << SnowingFactor << "\n";
+    file << "fWindSpeedFactor=" << WindSpeedFactor << "\n";
+
+    logger::info("Settings saved to INI");
+}
+
+void Settings::ResetIni() {
+    // Debug
+    EnableTimeLogging = true;
+    DebugMode = false;
+    DrawImpacts = true;
+    DrawLandscape = true;
+    DrawBoundBoxes = true;
+    DrawHazards = true;
+    DrawHazardsMovement = false;
+    DrawDecals = true;
+    DrawWind = true;
+    DebugDrawDuration = 1000;
+
+    // Timers
+    GrassPeriodicUpdateTime = 1.0f;
+    HazardPeriodicUpdateTime = 1.5f;
+    RefPeriodicUpdateTime = 1.0f;
+
+    // Grass
+    DefaultGrassIgnitionHeat = 25.0f;
+    DefaultGrassFuel = 25.0f;
+    DefaultMaxGrassHeat = 100.0f;
+    DefaultMinGrassHeat = -50.0f;
+    MinGrassColorValue = 45;
+    GrassHeightDecrease = 25.0f;
+
+    // Refs
+    DefaultRefIgnitionHeat = 50.0f;
+    DefaultRefFuel = 50.0f;
+    DefaultMaxRefHeat = 250.0f;
+    DefaultMinRefHeat = -100.0f;
+    UnderwaterRatio = 0.5f;
+    FuelRecoveryRate = 1.0f;
+
+    // Hazards
+    MaxHazardSpawn = 400;
+    MaxSmokeHazards = 100;
+    HazardAffectPCOnly = true;
+
+    // Decals
+    MinDacalSize = 500.0f;
+    MaxDacalSize = 650.0f;
+    DecalSpacing = 5;
+    DecalSamplingPoints = 3;
+
+    // Fire spreading
+    HeatDistributionFactor = 10.0f;
+    MaxHeatDistribution = 5.0f;
+    FuelConsumptionRate = 1.0f;
+    FuelToHeatRate = 0.50f;
+    SelfHeatLoss = 0.10f;
+    SelfColdLoss = 0.50f;
+
+    // Damage Multiplayers
+    FireDamageMultiplayer = 1.0f;
+    ShockDamageMultiplayer = 0.5f;
+    ColdDamageMultiplayer = 1.5f;
+    WaterDamageMultiplayer = 1.0f;
+
+    // Wheather
+    RainingFactor = 0.50f;
+    SnowingFactor = 0.75f;
+    WindSpeedFactor = 2.0f;
+}
+
 void Settings::LoadSettings() {
-    LoadAllPatterns("Data\\SKSE\\Plugins\\Wildfire\\StrFireSources", fireSources);
-    LoadAllPatterns("Data\\SKSE\\Plugins\\Wildfire\\StrShockSources", shockSources);
-    LoadAllPatterns("Data\\SKSE\\Plugins\\Wildfire\\StrColdSources", coldSources);
-    LoadAllPatterns("Data\\SKSE\\Plugins\\Wildfire\\StrWaterSources", waterSources);
+
+    LoadIni();
+
+    LoadAllPatterns("Data\\SKSE\\Plugins\\Wildfire\\NeutralSources", neutralSources);
+    LoadAllPatterns("Data\\SKSE\\Plugins\\Wildfire\\FireSources", fireSources);
+    LoadAllPatterns("Data\\SKSE\\Plugins\\Wildfire\\ShockSources", shockSources);
+    LoadAllPatterns("Data\\SKSE\\Plugins\\Wildfire\\ColdSources", coldSources);
+    LoadAllPatterns("Data\\SKSE\\Plugins\\Wildfire\\WaterSources", waterSources);
 
     grassConfig = LoadGrassConfigs("Data\\SKSE\\Plugins\\Wildfire\\Grass");
     refsConfig = LoadRefConfigs("Data\\SKSE\\Plugins\\Wildfire\\Refs");

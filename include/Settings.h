@@ -11,8 +11,9 @@ public:
     Settings() { LoadSettings(); }
 
     void LoadSettings();        // Load Settings from file
-    void SaveSettings() const;  // Save settings to file
-    void ResetSettings();       // Restore default and save to file
+    void LoadIni();
+    void SaveIni() const;  // Save settings to file
+    void ResetIni();
 
     void SaveCustomRefConfigs(const std::unordered_map<RE::FormID, RefConfig>& configs);
 
@@ -66,14 +67,15 @@ public:
     float FuelRecoveryRate = 1.0f;         // Rate at which fuel recovers per second for non-burning cells
 
     // Hazards
-    int MaxHazardSpawn = 25;  // Maximum hazards to spawn per type (4 types: Large, Big, Medium, Small)
-    int MaxSmokeHazards = 25;  // Maximum smoke hazards to spawn
+    int MaxHazardSpawn = 400;  // Maximum hazards to spawn per type (4 types: Large, Big, Medium, Small)
+    int MaxSmokeHazards = 100;  // Maximum smoke hazards to spawn
     bool HazardAffectPCOnly = true;
 
     // Decals
     float MinDacalSize = 500.0f;
     float MaxDacalSize = 650.0f;
     int DecalSpacing = 5;
+    int DecalSamplingPoints = 3;
 
     // Fire spreading
     float HeatDistributionFactor = 10.0f;  // Higher number = slower distribution
