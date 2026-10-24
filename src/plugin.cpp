@@ -5,21 +5,30 @@
 #include "MCP.h"
 #include "Hooks.h"
 #include "Settings.h"
+#include "Serialization.h"
+
+void RegisterSerialization() {
+    auto* serialization = SKSE::GetSerializationInterface();
+
+    serialization->SetUniqueID('FIRE');
+
+    serialization->SetSaveCallback(Serialization::Save);
+    serialization->SetLoadCallback(Serialization::Load);
+    //serialization->SetRevertCallback(Serialization::Revert);
+}
 
 void OnMessage(SKSE::MessagingInterface::Message* message) {
     if (message->type == SKSE::MessagingInterface::kDataLoaded) {
         Hooks::InstallHooks();
-        //Events::RegisterForEvents(); //Used just for testing
+        // Events::RegisterForEvents(); //Used just for testing
         MCP::Register();
         WildfireMgr::GetSingleton();  // Init
         Settings::GetSingleton();     // Init
 
     } else if (message->type == SKSE::MessagingInterface::kNewGame ||
-               message->type == SKSE::MessagingInterface::kPostLoadGame) {
-        logger::info("kPostLoadGame or kNewGame");
+               message->type == SKSE::MessagingInterface::kPreLoadGame) {
         WildfireMgr::GetSingleton()->OnGameLoad();
     } else if (message->type == SKSE::MessagingInterface::kSaveGame) {
-        logger::info("kSaveGame");
         WildfireMgr::GetSingleton()->OnGameSave();
     }
 }
@@ -30,5 +39,6 @@ SKSEPluginLoad(const SKSE::LoadInterface *skse) {
     logger::info("Plugin loaded");
     SKSE::Init(skse);
     SKSE::GetMessagingInterface()->RegisterListener(OnMessage);
+    RegisterSerialization();
     return true;
 }
