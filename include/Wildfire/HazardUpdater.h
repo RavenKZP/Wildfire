@@ -18,6 +18,7 @@ public:
     bool StartUpdate(const CellStateMapType& cellStateMap, const RefStateMapType& burningRefs);
 
     void OnGameLoad();
+    bool HazardLoaded(RE::TESObjectREFR* ref); // return true if fire/smoke
 
     bool IsRunning() const;
     std::optional<ResultType> GetResult();
@@ -31,8 +32,12 @@ public:
     void SetHazardsLifetine(float lifetime);
     void SetHazardsPCOnly(bool PCOnly);
 
+
 private:
     ResultType HazardUpdateLogic(const CellStateMapType cellStateMap, const RefStateMapType burningRefs);
+
+    void ManageSmokeHazards();
+    void ManageFireHazards();
 
     void SpawnHazard(const RE::NiPoint3& position, HazardType size, bool jitter = true);
     void MoveHazard(const RE::NiPoint3& pos, RE::Hazard* hazardRef, HazardType size, bool jitter = true);

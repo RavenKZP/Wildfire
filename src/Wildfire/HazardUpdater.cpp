@@ -2,7 +2,10 @@
 #include "Settings.h"
 #include "Utils.h"
 
+#ifndef NDEBUG
 #include "CLibUtilsQTR/DrawDebug.hpp"
+#endif
+
 #include "CLibUtilsQTR/Tasker.hpp"
 
 HazardUpdater::HazardUpdater() : running_(false) {
@@ -20,9 +23,9 @@ HazardUpdater::HazardUpdater() : running_(false) {
         auto* set = Settings::GetSingleton();
         SetHazardsPCOnly(set->HazardAffectPCOnly);
         SetHazardsLifetine(set->HazardPeriodicUpdateTime*1.1f);
-        logger::info("Fire Hazard forms found and loaded.");
+        logger::info("[HazardUpdater] Fire Hazard forms found and loaded.");
     } else {
-        logger::error("Fire Hazard forms not found. Please make sure Wildfire.esp is active");
+        logger::error("[HazardUpdater] Fire Hazard forms not found. Please make sure Wildfire.esp is active");
         RE::DebugMessageBox(
             "Wildfire Error: Fire Hazard forms not found. Please make sure Wildfire.esp is active");
     }
@@ -48,12 +51,12 @@ HazardUpdater::HazardUpdater() : running_(false) {
         if (SmokeHazard) {
             Wildfire_SmokeHazards.push_back(SmokeHazard);
         } else {
-            logger::error("Smoke Hazard forms not found. Please make sure Wildfire.esp is active");
+            logger::error("[HazardUpdater] Smoke Hazard forms not found. Please make sure Wildfire.esp is active");
             RE::DebugMessageBox("Wildfire Error: Smoke Hazard forms not found. Please make sure Wildfire.esp is active");
             return;
         }
     }
-    logger::info("Smoke Hazard forms found and loaded.");
+    logger::info("[HazardUpdater] Smoke Hazard forms found and loaded.");
 }
 
 void HazardUpdater::OnGameLoad() {
@@ -64,6 +67,7 @@ void HazardUpdater::OnGameLoad() {
             lastResult_.clear();
         }
 
+        /*
         {
             std::lock_guard lock(FireHazardsHandlesMutex);
             ActiveLargeHazardsHandles.clear();
@@ -76,7 +80,41 @@ void HazardUpdater::OnGameLoad() {
             std::lock_guard lock(SmokeHazardsHandlesMutex);
             ActiveSmokeHazardsHandles.clear();
         }
+        */
     }
+}
+
+bool HazardUpdater::HazardLoaded(RE::TESObjectREFR* ref) {
+    if (!ref) {
+        return false;
+    }
+    auto base = ref->GetBaseObject();
+    if (base == Wildfire_LargeHazard) {
+        std::lock_guard lock(FireHazardsHandlesMutex);
+        ActiveLargeHazardsHandles.push_back(ref->GetHandle());
+        return true;
+    } else if (base == Wildfire_BigHazard) {
+        std::lock_guard lock(FireHazardsHandlesMutex);
+        ActiveBigHazardsHandles.push_back(ref->GetHandle());
+        return true;
+    } else if (base == Wildfire_MediumHazard) {
+        std::lock_guard lock(FireHazardsHandlesMutex);
+        ActiveMediumHazardsHandles.push_back(ref->GetHandle());
+        return true;
+    } else if (base == Wildfire_SmallHazard) {
+        std::lock_guard lock(FireHazardsHandlesMutex);
+        ActiveSmallHazardsHandles.push_back(ref->GetHandle());
+        return true;
+    }
+
+    for (auto SmokeBase : Wildfire_SmokeHazards) {
+        if (base == SmokeBase) {
+            std::lock_guard lock(SmokeHazardsHandlesMutex);
+            ActiveSmokeHazardsHandles.push_back(ref->GetHandle());
+            return true;
+        }
+    }
+    return false;
 }
 
 bool HazardUpdater::StartUpdate(const CellStateMapType& cellStateMap,
@@ -187,8 +225,11 @@ HazardUpdater::ResultType HazardUpdater::HazardUpdateLogic(const CellStateMapTyp
     auto start = std::chrono::high_resolution_clock::now();
     static auto* set = Settings::GetSingleton();
 
-    logger::info("[Thread] HazardUpdater::HazardUpdateLogic started with {} cells in cellStateMap and {} burningRefs",
-                 cellStateMap.size(), burningRefs.size());
+    if (set->EnableTimeLogging) {
+        logger::info(
+            "[Thread][HazardUpdater] HazardUpdateLogic started with {} cells in cellStateMap and {} burningRefs",
+            cellStateMap.size(), burningRefs.size());
+    }
     ResultType spawnHazards;
 
     for (const auto& [ref, state] : burningRefs) {
@@ -253,14 +294,14 @@ HazardUpdater::ResultType HazardUpdater::HazardUpdateLogic(const CellStateMapTyp
     if (set->EnableTimeLogging) {
         auto burnGrid2DEnd = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double, std::milli> elapsed = burnGrid2DEnd - start;
-        logger::info("[Thread] Builded 2D Burn Grid size: [{},{}] in {} ms", width, height, elapsed.count());
+        logger::info("[Thread][HazardUpdater] Builded 2D Burn Grid size: [{},{}] in {} ms", width, height, elapsed.count());
     }
 
     if (burnGrid2D.empty()) {
         if (set->EnableTimeLogging) {
             auto end = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double, std::milli> elapsed = end - start;
-            logger::info("[Thread] Scanned burn grid and found {} hazard positions in {} ms", spawnHazards.size(),
+            logger::info("[Thread][HazardUpdater] Scanned burn grid and found {} hazard positions in {} ms", spawnHazards.size(),
                          elapsed.count());
         }
         return spawnHazards;
@@ -393,7 +434,7 @@ HazardUpdater::ResultType HazardUpdater::HazardUpdateLogic(const CellStateMapTyp
     if (set->EnableTimeLogging) {
         auto end = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double, std::milli> elapsed = end - start;
-        logger::info("[Thread] Scanned burn grid and found {} hazard positions in {} ms", spawnHazards.size(), elapsed.count());
+        logger::info("[Thread][HazardUpdater] Scanned burn grid and found {} hazard positions in {} ms", spawnHazards.size(), elapsed.count());
     }
 
     return spawnHazards;
@@ -427,227 +468,269 @@ static bool IsVisible(const RE::NiPoint3& pos, const RE::NiPoint3& camPos, const
     handles.swap(kept);
 
     return active;
-};
+ };
+
+ void HazardUpdater::ManageSmokeHazards() {
+     static auto* set = Settings::GetSingleton();
+     auto start = std::chrono::high_resolution_clock::now();
+
+         std::lock_guard lock(SmokeHazardsHandlesMutex);
+       std::queue<RE::Hazard*> active_smoke = cleanupActive(ActiveSmokeHazardsHandles);
+
+
+     while (!active_smoke.empty()) {
+
+         auto* hazard = active_smoke.front();
+         active_smoke.pop();
+         if (!hazard) {
+             continue;
+         }
+
+         float age = hazard->GetHazardRuntimeData().age;
+         float ramainAge = hazard->GetHazardRuntimeData().lifetime - age;
+
+         float value = 500.0f;
+         if (age < 5.0f) {
+             value = 100 * age;
+         } else if (ramainAge < 5.0f) {
+             auto fade = ramainAge / 5.0f;
+             if (auto haz3D = hazard->Get3D()) {
+                 if (auto hazFadeNode = haz3D->AsFadeNode()) {
+                     hazFadeNode->fadeAmount = fade;
+                 }
+             }
+         }
+
+         RE::NiPoint3 pos = hazard->GetPosition();
+         pos.z += value;
+         hazard->SetPosition(pos);
+         hazard->Update3DPosition(true);
+         pos.z -= value;
+         hazard->SetPosition(pos);
+     }
+
+     if (set->EnableTimeLogging && ActiveSmokeHazardsHandles.size() > 0) {
+         auto end = std::chrono::high_resolution_clock::now();
+         std::chrono::duration<double, std::milli> elapsed = end - start;
+         logger::info("[Main][HazardUpdater] Managed {} smoke Hazards in {} ms", ActiveSmokeHazardsHandles.size(),
+                      elapsed.count());
+     }
+ }
+
+ void HazardUpdater::ManageFireHazards() {
+     static auto* set = Settings::GetSingleton();
+     static auto* tes = RE::TES::GetSingleton();
+     static auto* cam = RE::PlayerCamera::GetSingleton();
+
+     auto start = std::chrono::high_resolution_clock::now();
+
+     int maxSpawn = set->MaxHazardSpawn;
+     if (maxSpawn <= 0) {
+         maxSpawn = INT_MAX;
+     }
+
+     std::queue<SpawnHazardData> large_hazards, big_hazards, medium_hazards, small_hazards;
+     std::queue<RE::Hazard*> active_large, active_big, active_medium, active_small;
+
+     ResultType hazardsCopy;
+     {
+         std::lock_guard lock(mutex_);
+         hazardsCopy = lastResult_;
+     }
+
+     if (hazardsCopy.empty()) {
+         return;
+     }
+
+     auto node = cam->cameraRoot;
+     RE::NiPoint3 camPos = node->world.translate;
+     RE::NiPoint3 camForward = node->world.rotate * RE::NiPoint3{0, 1, 0};
+
+     for (auto& h : hazardsCopy) {
+         if (auto ref = h.refHandle.get().get()) {
+             auto refPosition = Utils::GetPosition(ref);
+             h.position += refPosition;
+             if (h.highObject) {
+                 h.position.x = Utils::RandomFloat(refPosition.x, h.position.x);
+                 h.position.y = Utils::RandomFloat(refPosition.y, h.position.y);
+                 h.position.z = Utils::RandomFloat(refPosition.z, h.position.z);
+             }
+         }
+
+         float z;
+         if (tes->GetLandHeight(h.position, z)) {  // Get the terrain height at the position
+             if (h.position.z < z || h.position.z == FLT_MIN) {
+                 // Don't spawn underground, move it above the terrain
+                 h.position.z = z + 20.0f;
+             }
+         }
+
+         auto cell = tes->GetCell(h.position);
+         float waterHeight;
+         if (cell && cell->GetWaterHeight(h.position, waterHeight)) {
+             if (h.position.z < waterHeight) {
+                 // Don't spawn underwater, move it above the water
+                 h.position.z = waterHeight + 20.0f;
+             }
+         }
+
+#ifndef NDEBUG
+         if (set->DebugMode && set->DrawHazards) {
+             static auto* DebugAPI = DebugAPI_IMPL::DebugAPI::GetSingleton();
+             RE::NiColorA colour{1, 0, 0, 1};
+
+             auto p0 = h.position;
+             auto p1 = p0;
+             p1.z += h.size * 10;
+
+             DebugAPI->DrawLineForMS(p0, p1, set->DebugDrawDuration, colour, h.size);
+         }
+#endif
+
+         bool isHazViasble = IsVisible(h.position, camPos, camForward);
+         if (!isHazViasble) {
+             float distance = camPos.GetSquaredDistance(h.position);
+             if (distance > 2500.0f) {
+                 continue;
+             }
+         }
+
+         if (h.size == HazardType::SmallFireHazard)
+             small_hazards.push(h);
+         else if (h.size == HazardType::MediumFireHazard)
+             medium_hazards.push(h);
+         else if (h.size == HazardType::BigFireHazard)
+             big_hazards.push(h);
+         else
+             large_hazards.push(h);
+     }
+
+     int visableHazards = small_hazards.size() + medium_hazards.size() + big_hazards.size() + large_hazards.size();
+
+     // Shuffle each group
+     /*
+     static thread_local std::mt19937 rng{std::random_device{}()};
+     std::shuffle(large_hazards.begin(), large_hazards.end(), rng);
+     std::shuffle(big_hazards.begin(), big_hazards.end(), rng);
+     std::shuffle(medium_hazards.begin(), medium_hazards.end(), rng);
+     std::shuffle(small_hazards.begin(), small_hazards.end(), rng);
+     */
+
+     int activeSize = 0;
+     {
+         std::lock_guard lock(FireHazardsHandlesMutex);
+         active_large = cleanupActive(ActiveLargeHazardsHandles);
+         active_big = cleanupActive(ActiveBigHazardsHandles);
+         active_medium = cleanupActive(ActiveMediumHazardsHandles);
+         active_small = cleanupActive(ActiveSmallHazardsHandles);
+
+         activeSize = ActiveLargeHazardsHandles.size() + ActiveBigHazardsHandles.size() +
+                      ActiveMediumHazardsHandles.size() + ActiveSmallHazardsHandles.size();
+     }
+
+     int spawned = 0;
+     int moved = 0;
+     int limit = 0;
+     while (!large_hazards.empty()) {
+         if (limit >= maxSpawn * 0.25f) {
+             break;
+         }
+         const auto& sp = large_hazards.front();
+         if (!active_large.empty()) {
+             auto* active = active_large.front();
+             active_large.pop();
+             MoveHazard(sp.position, active, sp.size, false);
+             moved++;
+         } else {
+             SpawnHazard(sp.position, sp.size, false);
+             spawned++;
+         }
+         limit++;
+         large_hazards.pop();
+     }
+     limit = 0;
+     while (!big_hazards.empty()) {
+         if (limit >= maxSpawn * 0.25f) {
+             break;
+         }
+         const auto& sp = big_hazards.front();
+         if (!active_big.empty()) {
+             auto* active = active_big.front();
+             active_big.pop();
+             MoveHazard(sp.position, active, sp.size);
+             moved++;
+         } else {
+             SpawnHazard(sp.position, sp.size);
+             spawned++;
+         }
+         limit++;
+         big_hazards.pop();
+     }
+     limit = 0;
+     while (!medium_hazards.empty()) {
+         if (limit >= maxSpawn * 0.25f) {
+             break;
+         }
+         const auto& sp = medium_hazards.front();
+         if (!active_medium.empty()) {
+             auto* active = active_medium.front();
+             active_medium.pop();
+             MoveHazard(sp.position, active, sp.size);
+             moved++;
+         } else {
+             SpawnHazard(sp.position, sp.size);
+             spawned++;
+         }
+         limit++;
+         medium_hazards.pop();
+     }
+     limit = 0;
+     while (!small_hazards.empty()) {
+         if (limit >= maxSpawn * 0.25f) {
+             break;
+         }
+         const auto& sp = small_hazards.front();
+         if (!active_small.empty()) {
+             auto* active = active_small.front();
+             active_small.pop();
+             MoveHazard(sp.position, active, sp.size);
+             moved++;
+         } else {
+             SpawnHazard(sp.position, sp.size);
+             spawned++;
+         }
+         limit++;
+         small_hazards.pop();
+     }
+ }
 
 void HazardUpdater::ManageHazards() {
-    static auto* tes = RE::TES::GetSingleton();
     static auto* set = Settings::GetSingleton();
-    static auto* cam = RE::PlayerCamera::GetSingleton();
+
+    static bool resume = false;
+
+    if (set->EnableTimeLogging) {
+        if (ActiveSmokeHazardsHandles.empty() && ActiveLargeHazardsHandles.empty() && ActiveBigHazardsHandles.empty() &&
+            ActiveMediumHazardsHandles.empty() && ActiveSmallHazardsHandles.empty()) {
+        } else {
+            logger::info("[Main][HazardUpdater] ManageHazards started");
+        }
+    }
 
     auto start = std::chrono::high_resolution_clock::now();
 
-    std::queue<RE::Hazard*> active_smoke;
-    {
-        std::lock_guard lock(SmokeHazardsHandlesMutex);
-        active_smoke = cleanupActive(ActiveSmokeHazardsHandles);
-    }
 
-    while (!active_smoke.empty()) {
-        auto* hazard = active_smoke.front();
-        active_smoke.pop();
-        if (!hazard) {
-            continue;
-        }
+    // Step 1: Cleanup and manage active smoke hazards
+    ManageSmokeHazards();
 
-        float age = hazard->GetHazardRuntimeData().age;
-        float ramainAge = hazard->GetHazardRuntimeData().lifetime - age;
+    // Step 2: Manage fire hazards
+    ManageFireHazards();
 
-        float value = 500.0f;
-        if (age < 5.0f) {
-            value = 100 * age;
-        } else if (ramainAge < 5.0f) {
-            auto fade = ramainAge / 5.0f;
-            if (auto haz3D = hazard->Get3D()) {
-                if (auto hazFadeNode = haz3D->AsFadeNode()) {
-                    hazFadeNode->fadeAmount = fade;
-                }
-            }
-        }
 
-        RE::NiPoint3 pos = hazard->GetPosition();
-        pos.z += value;
-        hazard->SetPosition(pos);
-        hazard->Update3DPosition(true);
-        pos.z -= value;
-        hazard->SetPosition(pos);
-    }
-
-    ResultType hazardsCopy;
-    {
-        std::lock_guard lock(mutex_);
-        hazardsCopy = lastResult_;
-    }
-
-    if (hazardsCopy.empty()) {
-        return;
-    }
-
-    int maxSpawn = set->MaxHazardSpawn;
-    if (maxSpawn <= 0) {
-        maxSpawn = INT_MAX;
-    }
-
-    auto node = cam->cameraRoot;
-    RE::NiPoint3 camPos = node->world.translate;
-    RE::NiPoint3 camForward = node->world.rotate * RE::NiPoint3{0, 1, 0};
-
-    std::vector<SpawnHazardData> large_hazards, big_hazards, medium_hazards, small_hazards;
-    for (auto& h : hazardsCopy) {
-        if (auto ref = h.refHandle.get().get()) {
-            auto refPosition = Utils::GetPosition(ref);
-            h.position += refPosition;
-            if (h.highObject) {
-                h.position.x = Utils::RandomFloat(refPosition.x, h.position.x);
-                h.position.y = Utils::RandomFloat(refPosition.y, h.position.y);
-                h.position.z = Utils::RandomFloat(refPosition.z, h.position.z);
-            }
-        }
-
-        float z;
-        if (tes->GetLandHeight(h.position, z)) {  // Get the terrain height at the position
-            if (h.position.z < z || h.position.z == FLT_MIN) {
-                // Don't spawn underground, move it above the terrain
-                h.position.z = z + 20.0f;
-            }
-        }
-
-        auto cell = tes->GetCell(h.position);
-        float waterHeight;
-        if (cell && cell->GetWaterHeight(h.position, waterHeight)) {
-            if (h.position.z < waterHeight) {
-                // Don't spawn underwater, move it above the water
-                h.position.z = waterHeight + 20.0f;
-            }
-        }
-
-        if (set->DebugMode && set->DrawHazards) {
-            static auto* DebugAPI = DebugAPI_IMPL::DebugAPI::GetSingleton();
-            RE::NiColorA colour{1, 0, 0, 1};
-
-            auto p0 = h.position;
-            auto p1 = p0;
-            p1.z += h.size * 10;
-
-            DebugAPI->DrawLineForMS(p0, p1, set->DebugDrawDuration, colour, h.size);
-        }
-
-        bool isHazViasble = IsVisible(h.position, camPos, camForward);
-        if (!isHazViasble) {
-            float distance = camPos.GetSquaredDistance(h.position);
-            if (distance > 2500.0f) {
-                // If not visible and far away, skip spawning to save performance
-                // logger::debug("Skipping Hazard isHazViasble {} distance {}", isHazViasble, distance);
-                continue;
-            }
-        }
-
-        if (h.size == HazardType::SmallFireHazard)
-            small_hazards.push_back(h);
-        else if (h.size == HazardType::MediumFireHazard)
-            medium_hazards.push_back(h);
-        else if (h.size == HazardType::BigFireHazard)
-            big_hazards.push_back(h);
-        else
-            large_hazards.push_back(h);
-    }
-
-    int visableHazards = small_hazards.size() + medium_hazards.size() + big_hazards.size() + large_hazards.size();
-
-    // Shuffle each group
-    /*
-    static thread_local std::mt19937 rng{std::random_device{}()};
-    std::shuffle(large_hazards.begin(), large_hazards.end(), rng);
-    std::shuffle(big_hazards.begin(), big_hazards.end(), rng);
-    std::shuffle(medium_hazards.begin(), medium_hazards.end(), rng);
-    std::shuffle(small_hazards.begin(), small_hazards.end(), rng);
-    */
-
-    std::queue<RE::Hazard*> active_large, active_big, active_medium, active_small;
-    int activeSize = 0;
-    {
-        std::lock_guard lock(FireHazardsHandlesMutex);
-        active_large = cleanupActive(ActiveLargeHazardsHandles);
-        active_big = cleanupActive(ActiveBigHazardsHandles);
-        active_medium = cleanupActive(ActiveMediumHazardsHandles);
-        active_small = cleanupActive(ActiveSmallHazardsHandles);
-
-        activeSize = ActiveLargeHazardsHandles.size() + ActiveBigHazardsHandles.size() +
-                     ActiveMediumHazardsHandles.size() + ActiveSmallHazardsHandles.size();
-    }
-
-    // Spawn up to maxSpawn
-    int spawned = 0;
-    int moved = 0;
-    int limit = 0;
-    for (const auto& sp : large_hazards) {
-        if (limit >= maxSpawn) {
-            break;
-        }
-        if (!active_large.empty()) {
-            auto* active = active_large.front();
-            active_large.pop();
-            MoveHazard(sp.position, active, sp.size, false);
-            moved++;
-        } else {
-            SpawnHazard(sp.position, sp.size, false);
-            spawned++;
-        }
-        limit++;
-    }
-    limit = 0;
-    for (const auto& sp : big_hazards) {
-        if (limit >= maxSpawn) {
-            break;
-        }
-        if (!active_big.empty()) {
-            auto* active = active_big.front();
-            active_big.pop();
-            MoveHazard(sp.position, active, sp.size);
-            moved++;
-        } else {
-            SpawnHazard(sp.position, sp.size);
-            spawned++;
-        }
-        limit++;
-    }
-    limit = 0;
-    for (const auto& sp : medium_hazards) {
-        if (limit >= maxSpawn) {
-            break;
-        }
-        if (!active_medium.empty()) {
-            auto* active = active_medium.front();
-            active_medium.pop();
-            MoveHazard(sp.position, active, sp.size);
-            moved++;
-        } else {
-            SpawnHazard(sp.position, sp.size);
-            spawned++;
-        }
-        limit++;
-    }
-    limit = 0;
-    for (const auto& sp : small_hazards) {
-        if (limit >= maxSpawn) {
-            break;
-        }
-        if (!active_small.empty()) {
-            auto* active = active_small.front();
-            active_small.pop();
-            MoveHazard(sp.position, active, sp.size);
-            moved++;
-        } else {
-            SpawnHazard(sp.position, sp.size);
-            spawned++;
-        }
-        limit++;
-    }
-
-    if (set->EnableTimeLogging) {
+     if (set->EnableTimeLogging) {
         auto end = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double, std::milli> elapsed = end - start;
-        logger::info("Spawned Hazards: {} places: {} visable: {} Moved: {} active: {} in {} ms", spawned, hazardsCopy.size(),
-                     visableHazards, moved, activeSize, elapsed.count());
+        logger::info("[Main][HazardUpdater] ManageHazards took {} ms", elapsed.count());
     }
 }
 
@@ -679,7 +762,7 @@ void HazardUpdater::SpawnSmokeHazardAt(const RE::NiPoint3& position) {
 
     auto hazardRef = player->PlaceObjectAtMe(hazardToSpawn, false)->As<RE::Hazard>();
     if (!hazardRef) {
-        logger::error("Failed to place smoke hazard");
+        logger::error("[Main][HazardUpdater] Failed to place smoke hazard");
         return;
     }
     auto spawnPosition = position;
@@ -725,11 +808,11 @@ void HazardUpdater::SpawnHazard(const RE::NiPoint3& pos, HazardType size, bool j
             scale = 4.0f;
             break;
         default:
-            logger::error("Invalid hazard size: {}", size);
+            logger::error("[Main][HazardUpdater] Invalid hazard size: {}", size);
             return;
     }
     if (!hazardToSpawn) {
-        logger::error("Hazard form not found for size: {}", size);
+        logger::error("[Main][HazardUpdater] Hazard form not found for size: {}", size);
         return;
     }
 
@@ -744,7 +827,7 @@ void HazardUpdater::SpawnHazard(const RE::NiPoint3& pos, HazardType size, bool j
 
     auto hazardRef = player->PlaceObjectAtMe(hazardToSpawn, false)->As<RE::Hazard>();
     if (!hazardRef) {
-        logger::error("Failed to place fire hazard");
+        logger::error("[Main][HazardUpdater] Failed to place fire hazard");
         return;
     }
     // Random rotation around Z-axis (yaw) to add visual variety
@@ -771,7 +854,7 @@ void HazardUpdater::SpawnHazard(const RE::NiPoint3& pos, HazardType size, bool j
                 ActiveLargeHazardsHandles.push_back(hazardRef->GetHandle());
                 break;
             default:
-                logger::error("Invalid hazard size: {}", size);
+                logger::error("[Main][HazardUpdater] Invalid hazard size: {}", size);
                 return;
         }
     }
@@ -792,12 +875,14 @@ void HazardUpdater::MoveHazard(const RE::NiPoint3& pos, RE::Hazard* hazardRef, H
         newPos.y += Utils::RandomFloat(-offsetRange, offsetRange);
     }
 
-
+    
+#ifndef NDEBUG
     if (set->DebugMode && set->DrawHazards && set->DrawHazardsMovement) {
         static auto* DebugAPI = DebugAPI_IMPL::DebugAPI::GetSingleton();
         RE::NiColorA colour{1, 0, 1, 1};  // Purple
         DebugAPI->DrawLineForMS(hazardRef->GetPosition(), newPos, set->DebugDrawDuration, colour, size);
     }
+#endif
 
     hazardRef->SetPosition(newPos);
     hazardRef->Update3DPosition(true);
