@@ -249,7 +249,7 @@ namespace Utils {
     }
 
     RefType GetGeometryType(RE::TESObjectREFR* ref) {
-        RefType res = RefType::Tree;
+        RefType res = RefType::Static;
         if (!ref) {
             return res;
         }
@@ -366,7 +366,7 @@ namespace Utils {
         if (auto spellSource = proj->GetProjectileRuntimeData().spell) {
             type = CheckPatterns(spellSource);
             if (type != ElementType::Unknown) {
-                logger::debug("projectile {}, is {}", clib_util::editorID::get_editorID(base), ElementTypeToStr(type));
+                logger::debug("[Utils] Projectile {}, is {}", clib_util::editorID::get_editorID(base), ElementTypeToStr(type));
                 DetectionCache->Add(baseFormID, type);
                 return type;
             }
@@ -376,7 +376,7 @@ namespace Utils {
                 if (magEf && magEf->baseEffect) {
                     type = CheckPatterns(magEf->baseEffect);
                     if (type != ElementType::Unknown) {
-                        logger::debug("projectile {}, is {}", clib_util::editorID::get_editorID(base),
+                        logger::debug("[Utils] Projectile {}, is {}", clib_util::editorID::get_editorID(base),
                                       ElementTypeToStr(type));
                         DetectionCache->Add(baseFormID, type);
                         return type;
@@ -388,7 +388,7 @@ namespace Utils {
         // 4. Ammo source
         type = CheckPatterns(proj->GetProjectileRuntimeData().ammoSource);
         if (type != ElementType::Unknown) {
-            logger::debug("projectile {}, is {}", clib_util::editorID::get_editorID(base), ElementTypeToStr(type));
+            logger::debug("[Utils] Projectile {}, is {}", clib_util::editorID::get_editorID(base), ElementTypeToStr(type));
             DetectionCache->Add(baseFormID, type);
             return type;
         }
@@ -396,14 +396,14 @@ namespace Utils {
         // 5. Weapon source
         type = CheckPatterns(proj->GetProjectileRuntimeData().weaponSource);
         if (type != ElementType::Unknown) {
-            logger::debug("projectile {}, is {}", clib_util::editorID::get_editorID(base), ElementTypeToStr(type));
+            logger::debug("[Utils] Projectile {}, is {}", clib_util::editorID::get_editorID(base), ElementTypeToStr(type));
             DetectionCache->Add(baseFormID, type);
             return type;
         }
 
         // 6. Projectile's own base object
         type = CheckPatterns(base);
-        logger::debug("projectile {}, is {}", clib_util::editorID::get_editorID(base), ElementTypeToStr(type));
+        logger::debug("[Utils] Projectile {}, is {}", clib_util::editorID::get_editorID(base), ElementTypeToStr(type));
         DetectionCache->Add(baseFormID, type);
         return type;
     }
@@ -453,7 +453,7 @@ namespace Utils {
         };
 
         type = CheckPatterns(base);
-        logger::debug("expolision {}, is {}", clib_util::editorID::get_editorID(base), ElementTypeToStr(type));
+        logger::debug("[Utils] Expolision {}, is {}", clib_util::editorID::get_editorID(base), ElementTypeToStr(type));
         DetectionCache->Add(baseFormID, type);
         return type;
     }
