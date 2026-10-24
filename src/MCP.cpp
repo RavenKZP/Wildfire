@@ -20,8 +20,7 @@ namespace MCP {
         SKSEMenuFramework::SetSection("Wildfire");
         SKSEMenuFramework::AddSectionItem("Settings", RenderSettings);
         SKSEMenuFramework::AddSectionItem("Config Creator", RenderConfigCreator);
-        //SKSEMenuFramework::AddSectionItem("Config Editor", RenderConfigEditor);
-
+        SKSEMenuFramework::AddSectionItem("Config Viewer", RenderConfigEditor);
 
 #ifndef NDEBUG
         SKSEMenuFramework::AddSectionItem("Burning Cells Gird", RenderBurningGird);
@@ -213,27 +212,39 @@ namespace MCP {
     
     void __stdcall RenderConfigEditor() {
         auto* set = Settings::GetSingleton();
-        ImGuiMCP::Text("Grass Configs");
-        for (auto& [formID, config] : set->grassConfig) {
-            ImGuiMCP::Text("FormID: %08X EditorID: %s", formID, config.EditorID);
-            ImGuiMCP::Checkbox(("Can Burn##" + std::to_string(formID)).c_str(), &config.canBurn);
-            ImGuiMCP::InputFloat(("Ignition Heat##" + std::to_string(formID)).c_str(), &config.ignitionHeat);
-            ImGuiMCP::InputFloat(("Fuel##" + std::to_string(formID)).c_str(), &config.fuel);
+        if (ImGuiMCP::CollapsingHeader("Grass Configs")) {
+            for (auto& [formID, config] : set->grassConfig) {
+                ImGuiMCP::Text("FormID: %08X EditorID: %s", formID, config.EditorID);
+                ImGuiMCP::Checkbox(("Can Burn##" + std::to_string(formID)).c_str(), &config.canBurn);
+                ImGuiMCP::InputFloat(("Ignition Heat##" + std::to_string(formID)).c_str(), &config.ignitionHeat);
+                ImGuiMCP::InputFloat(("Fuel##" + std::to_string(formID)).c_str(), &config.fuel);
+            }
         }
 
-        ImGuiMCP::Text("Objects Configs");
-        for (auto& [formID, config] : set->refsConfig) {
-            ImGuiMCP::Text("FormID: %08X EditorID: %s", formID, config.EditorID);
-            ImGuiMCP::Checkbox(("Can Burn##" + std::to_string(formID)).c_str(), &config.canBurn);
-            ImGuiMCP::InputFloat(("Ignition Heat##" + std::to_string(formID)).c_str(), &config.ignitionHeat);
-            ImGuiMCP::InputFloat(("Fuel##" + std::to_string(formID)).c_str(), &config.fuel);
+        if (ImGuiMCP::CollapsingHeader("Objects Configs")) {
+            for (auto& [formID, config] : set->refsConfig) {
+                ImGuiMCP::Text("FormID: %08X EditorID: %s", formID, config.EditorID);
+                ImGuiMCP::Checkbox(("Can Burn##" + std::to_string(formID)).c_str(), &config.canBurn);
+                ImGuiMCP::InputFloat(("Ignition Heat##" + std::to_string(formID)).c_str(), &config.ignitionHeat);
+                ImGuiMCP::InputFloat(("Fuel##" + std::to_string(formID)).c_str(), &config.fuel);
+            }
         }
-
-
     }
 
     void __stdcall RenderSettings() {
         static auto* set = Settings::GetSingleton();
+
+        if (ImGuiMCP::Button("Save Settings")) {
+            set->SaveIni();
+        }
+        ImGuiMCP::SameLine();
+        if (ImGuiMCP::Button("Load Settings")) {
+            set->LoadIni();
+        }
+        ImGuiMCP::SameLine();
+        if (ImGuiMCP::Button("Reset Settings")) {
+            set->ResetIni();
+        }
 
         // =========================
         // General
@@ -247,11 +258,14 @@ namespace MCP {
             ImGuiMCP::SameLine();
             HelpMarker("Enable Detailed logs about frame time consumed by mod.");
 
+#ifndef NDEBUG
             ImGuiMCP::Checkbox("Debug Mode", &set->DebugMode);
             ImGuiMCP::SameLine();
             HelpMarker("Enables debug visualization");
+#endif
         }
 
+#ifndef NDEBUG
         // =========================
         // Debug Visuals
         // =========================
@@ -288,7 +302,7 @@ namespace MCP {
             ImGuiMCP::SameLine();
             HelpMarker("How long debug shapes remain visible.");
         }
-
+#endif
         // =========================
         // Update Timers
         // =========================
@@ -312,7 +326,7 @@ namespace MCP {
         // =========================
         // Grass Settings
         // =========================
-        if (ImGuiMCP::CollapsingHeader("Grass Simulation", ImGuiMCP::ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGuiMCP::CollapsingHeader("Grass Simulation")) {
             ImGuiMCP::SliderFloat("Grass Ignition Heat", &set->DefaultGrassIgnitionHeat, 0.0f, 100.0f, "%.1f");
             ImGuiMCP::SetTooltip("Minimum heat required for grass to ignite.");
 
@@ -338,7 +352,7 @@ namespace MCP {
         // =========================
         // Tree / Ref Settings
         // =========================
-        if (ImGuiMCP::CollapsingHeader("Reference Objects (Trees etc.)", ImGuiMCP::ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGuiMCP::CollapsingHeader("Reference Objects (Trees etc.)")) {
             ImGuiMCP::SliderFloat("Ref Ignition Heat", &set->DefaultRefIgnitionHeat, 0.0f, 200.0f, "%.1f");
             ImGuiMCP::SetTooltip("Heat required for trees or references to ignite.");
 
@@ -357,10 +371,35 @@ namespace MCP {
             ImGuiMCP::SliderFloat("Fuel Recovery Rate", &set->FuelRecoveryRate, 0.0f, 10.0f, "%.2f");
             ImGuiMCP::SetTooltip("Rate at which fuel recovers for non-burning references.");
         }
+
+        // =========================
+        // Hazards
+        // =========================
+        if (ImGuiMCP::CollapsingHeader("Hazards")) {
+            ImGuiMCP::Text("-1 is unlimited, 0 disables hazards completely, 25-30 is safe and visually good");
+            ImGuiMCP::SliderInt("Max Fire Hazard Spawn", &set->MaxHazardSpawn, -1, 1000);
+            ImGuiMCP::SameLine();
+            HelpMarker(
+                "The engine by default can renders about 30 fire hazards at once.\n"
+                "This is number of particles limitation.\n"
+                "Additional hazards exist but remain invisible.\n"
+                "Use Particle Limit Uncapper to bypass this limitation");
+
+            ImGuiMCP::SliderInt("Max Smoke Spawn", &set->MaxSmokeHazards, -1, 250);
+            ImGuiMCP::SameLine();
+            HelpMarker("Smoke effects aren't particles like fire hazards, but may affect FPS if spawned a lot at once");
+
+            if (ImGuiMCP::Checkbox("Hazards Affect Player Only", &set->HazardAffectPCOnly)) {
+                WildfireMgr::GetSingleton()->SetHazardsPCOnly(set->HazardAffectPCOnly);
+            }
+            ImGuiMCP::SameLine();
+            HelpMarker("If enabled, hazards will only damage the player character.");
+        }
+
         // =========================
         // Decals Settings
         // =========================
-        if (ImGuiMCP::CollapsingHeader("Decals (Burned Ground)", ImGuiMCP::ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGuiMCP::CollapsingHeader("Decals (Burned Ground)")) {
             ImGuiMCP::SliderFloat("Min Dacal Size", &set->MinDacalSize, 200.0f, 500.0f, "%.0f");
             ImGuiMCP::SetTooltip("Minimum size of decal");
 
@@ -371,12 +410,16 @@ namespace MCP {
             ImGuiMCP::SetTooltip("Spacing between decals.");
             int decalsPerQuad = 289 / set->DecalSpacing;
             ImGuiMCP::Text("Decals per Quad: %d Cell: %d", decalsPerQuad, decalsPerQuad*4);
+
+            ImGuiMCP::SliderInt("Decal Sampling Points Mult", &set->DecalSamplingPoints, 1, 10);
+            ImGuiMCP::Text("Decal Sampling Points: %d", set->DecalSamplingPoints * 4);
+            ImGuiMCP::SetTooltip("How many point decal should check on spawn (For consistency between surfaces)");
         }
 
         // =========================
         // Fire Spread
         // =========================
-        if (ImGuiMCP::CollapsingHeader("Fire Spread Simulation", ImGuiMCP::ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGuiMCP::CollapsingHeader("Fire Spread Simulation")) {
             ImGuiMCP::SliderFloat("Heat Distribution Factor", &set->HeatDistributionFactor, 0.1f, 100.0f, "%.2f");
             ImGuiMCP::SetTooltip("Controls how quickly heat spreads between cells. Higher = slower spread.");
 
@@ -399,7 +442,7 @@ namespace MCP {
         // =========================
         // Damage
         // =========================
-        if (ImGuiMCP::CollapsingHeader("Damage Multipliers", ImGuiMCP::ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGuiMCP::CollapsingHeader("Damage Multipliers")) {
             ImGuiMCP::SliderFloat("Fire Damage Multiplier", &set->FireDamageMultiplayer, 0.0f, 10.0f, "%.2f");
             ImGuiMCP::SetTooltip("Multiplier applied to fire damage.");
 
@@ -416,7 +459,7 @@ namespace MCP {
         // =========================
         // Weather
         // =========================
-        if (ImGuiMCP::CollapsingHeader("Weather Influence", ImGuiMCP::ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGuiMCP::CollapsingHeader("Weather Influence")) {
             ImGuiMCP::SliderFloat("Rain Spread Factor", &set->RainingFactor, 0.0f, 1.0f, "%.2f");
             ImGuiMCP::SetTooltip("Reduces fire spread when raining.");
 
@@ -425,23 +468,6 @@ namespace MCP {
 
             ImGuiMCP::SliderFloat("Wind Speed Factor", &set->WindSpeedFactor, 0.0f, 10.0f, "%.2f");
             ImGuiMCP::SetTooltip("Higher values make wind influence fire spread more.");
-        }
-
-        // =========================
-        // Hazards
-        // =========================
-        if (ImGuiMCP::CollapsingHeader("Hazards", ImGuiMCP::ImGuiTreeNodeFlags_DefaultOpen)) {
-            ImGuiMCP::SliderInt("Max Hazard Spawn", &set->MaxHazardSpawn,-1, 200);
-            ImGuiMCP::SameLine();
-            HelpMarker(
-                "The engine only renders about 30 hazards at once.\n"
-                "Additional hazards may exist but remain invisible.");
-
-            if (ImGuiMCP::Checkbox("Hazards Affect Player Only", &set->HazardAffectPCOnly)) {
-                WildfireMgr::GetSingleton()->SetHazardsPCOnly(set->HazardAffectPCOnly);
-            }
-            ImGuiMCP::SameLine();
-            HelpMarker("If enabled, hazards will only damage the player character.");
         }
     }
 
