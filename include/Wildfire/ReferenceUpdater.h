@@ -9,6 +9,8 @@ public:
     ReferenceUpdater();
 
     void OnGameLoad();
+    void HazardLoaded(RE::TESObjectREFR* ref);
+    void RefLoaded(RE::TESObjectREFR* ref, RefState state);
 
     bool StartUpdate(RefEventType& refEvents, RefStateMapType& burningRefs, WeatherData& wheatherData, float delta);
     bool IsRunning() const;
@@ -23,8 +25,11 @@ public:
     // Safe to use in thread
     RefState* GetRefState(RefStateMapType& burningRefs, RE::ObjectRefHandle refHandle);
 
+    void ResetAllObjects(RefStateMapType& burningRefs);
+
     // FX
     void ApplyCharredFX(RE::TESObjectREFR* ref);
+    void ApplyCharredInstantFXS(RE::TESObjectREFR* ref);
     void ApplyBurningFX(RE::TESObjectREFR* ref);
     void ApplyFrostFX(RE::TESObjectREFR* ref);
     void ApplyDesintegrateFX(RE::ObjectRefHandle refHandle, RE::TESBoundObject* baseObjectSwap = nullptr);
@@ -46,6 +51,7 @@ private:
                                          float delta);
 
     RE::TESEffectShader* CharredFXS = nullptr;
+    RE::TESEffectShader* CharredInstantFXS = nullptr;
     RE::TESEffectShader* BurningFXS = nullptr;
     RE::TESEffectShader* FrostFXS = nullptr;
     RE::TESEffectShader* DesintegrateFXS = nullptr;
