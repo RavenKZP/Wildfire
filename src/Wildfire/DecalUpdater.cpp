@@ -3,8 +3,10 @@
 #include "Settings.h"
 #include "Types.h"
 
-// To be removed in release builds
+
+#ifndef NDEBUG
 #include "CLibUtilsQTR/DrawDebug.hpp"
+#endif
 
 #include <array>
 #include <unordered_set>
@@ -62,11 +64,24 @@ static RE::NiAVObject* GethkpCollidable3D(const RE::hkpCollidable* a_this) {
 enum class SystemGroup : std::uint16_t { kTerrain = 1 };
 
 DecalUpdater::DecalUpdater() {
-    defaultImpactDataSet = RE::TESForm::LookupByEditorID<RE::BGSImpactDataSet>("Wildfire_FireImpactDataSetOld");
+    defaultImpactDataSet = RE::TESForm::LookupByEditorID<RE::BGSImpactDataSet>("Wildfire_FireImpactDataSet");
+
+    if (defaultImpactDataSet) {
+        logger::info("[DecalUpdater] Fire Impact Data Set found and loaded.");
+    } else {
+        logger::error("[DecalUpdater] Fire Impact Data Set not found. Please make sure Wildfire.esp is active");
+        RE::DebugMessageBox("Wildfire Error: Fire Impact Data Set not found. Please make sure Wildfire.esp is active");
+    }
 }
 
 bool DecalUpdater::SpawnBurnDecalAtPosition(const RE::NiPoint3& worldPosition) {
+    static auto* set = Settings::GetSingleton();
     auto start = std::chrono::high_resolution_clock::now();
+
+    if (set->EnableTimeLogging) {
+        logger::info("[Main][DecalUpdater] Start to Spawn Decal");
+    }
+
     auto* parentCell = RE::TES::GetSingleton()->GetCell(worldPosition);
 
     if (!parentCell) {
@@ -84,8 +99,6 @@ bool DecalUpdater::SpawnBurnDecalAtPosition(const RE::NiPoint3& worldPosition) {
     if (!impactDataSet) {
         return false;
     }
-
-    static auto* set = Settings::GetSingleton();
 
     RE::NiPoint3 origin = worldPosition;
     RE::NiPoint3 ray = {0.0f, 0.0f, -512.0f};
@@ -111,6 +124,7 @@ bool DecalUpdater::SpawnBurnDecalAtPosition(const RE::NiPoint3& worldPosition) {
     const auto* rootCollidable = rayHit.rootCollidable;
 
     if (!rootCollidable) {
+#ifndef NDEBUG
         if (set->DebugMode && set->DrawDecals) {
             static auto* DebugAPI = DebugAPI_IMPL::DebugAPI::GetSingleton();
             RE::NiColorA white{0.5f, 0.5f, 0.5f, 1.0f};  // Gray
@@ -118,6 +132,7 @@ bool DecalUpdater::SpawnBurnDecalAtPosition(const RE::NiPoint3& worldPosition) {
             const float thickness = 2.0f;
             DebugAPI->DrawLineForMS(origin, origin + ray, duration, white, thickness);
         }
+#endif
         return false;
     }
 
@@ -128,6 +143,7 @@ bool DecalUpdater::SpawnBurnDecalAtPosition(const RE::NiPoint3& worldPosition) {
 
     normal.Unitize();
 
+#ifndef NDEBUG
     // Debug: draw raycast line (origin -> hit position) in white when enabled
     if (set->DebugMode && set->DrawDecals) {
         static auto* DebugAPI = DebugAPI_IMPL::DebugAPI::GetSingleton();
@@ -136,6 +152,7 @@ bool DecalUpdater::SpawnBurnDecalAtPosition(const RE::NiPoint3& worldPosition) {
         const float thickness = 2.0f;
         DebugAPI->DrawLineForMS(origin, position, duration, white, thickness);
     }
+#endif
 
     RE::MATERIAL_ID materialID{0};
     RE::NiAVObject* target3D{nullptr};
@@ -189,32 +206,33 @@ bool DecalUpdater::SpawnBurnDecalAtPosition(const RE::NiPoint3& worldPosition) {
         }
         target3D = GethkpCollidable3D(rootCollidable);
     }
+    if (!target3D) {
+        return false;
+    }
 
     auto* materialType = RE::BGSMaterialType::GetMaterialType(materialID);
-
     if (!materialType) {
         return false;
     }
 
-    auto* impactData = impactDataSet->impactMap.find(materialType)->second;
+    auto scatterTable = impactDataSet->impactMap.find(materialType);
+    if (scatterTable == impactDataSet->impactMap.end()) {
+        return false;
+    }
 
+    auto* impactData = scatterTable->second;
     if (!impactData) {
         return false;
     }
 
     auto* primaryTextureSet = impactData->decalTextureSet;
-
     if (!primaryTextureSet) {
-        return true;
+        return false;
     }
 
-    if (!target3D) {
-        return true;
-    }
     auto* target = target3D->GetUserData();
-
     if (!terrain && !target) {
-        return true;
+        return false;
     }
 
     RE::BGSDecalManager::CreationData creationData;
@@ -281,19 +299,48 @@ bool DecalUpdater::SpawnBurnDecalAtPosition(const RE::NiPoint3& worldPosition) {
         const float offset = 0.5f * scale;
         const float halfOffset = 0.5f * offset;
 
-        std::vector<std::pair<float, float>> cornerOffsets = {{offset, offset},
-                                                              {offset, -offset},
-                                                              {-offset, offset},
-                                                              {-offset, -offset},
-                                                              {offset, 0.0f},
-                                                              {-offset, 0.0f},
-                                                              {0.0f, offset},
-                                                              {0.0f, -offset},
-                                                              {halfOffset, halfOffset},
-                                                              {halfOffset, -halfOffset},
-                                                              {-halfOffset, halfOffset},
-                                                              {-halfOffset, -halfOffset}};
+        const int samplingPoints = std::max(4, set->DecalSamplingPoints * 4);
 
+        std::vector<std::pair<float, float>> cornerOffsets;
+        cornerOffsets.reserve(samplingPoints);
+
+        // Always add the 4 corners
+        cornerOffsets = {{offset, offset}, {offset, -offset}, {-offset, offset}, {-offset, -offset}};
+
+        const int additionalPoints = (samplingPoints - 4) / 4;
+
+        for (int i = 1; i <= additionalPoints; ++i) {
+            const bool edge = (i % 2 == 1);
+            const int pointsPerSide = (i + 1) / 2;
+
+            const float step = offset / static_cast<float>(pointsPerSide);
+
+            if (edge) {
+                // Add points between the corners on each edge.
+                for (int j = 1; j <= pointsPerSide; ++j) {
+                    const float p =
+                        -offset + 2.0f * offset * (static_cast<float>(j) / static_cast<float>(pointsPerSide + 1));
+
+                    cornerOffsets.emplace_back(p, offset);
+                    cornerOffsets.emplace_back(p, -offset);
+                    cornerOffsets.emplace_back(offset, p);
+                    cornerOffsets.emplace_back(-offset, p);
+                }
+            } else {
+                // Add points along the diagonals.
+                for (int j = 1; j <= pointsPerSide; ++j) {
+                    const float p =
+                        -offset + 2.0f * offset * (static_cast<float>(j) / static_cast<float>(pointsPerSide + 1));
+
+                    cornerOffsets.emplace_back(p, p);
+                    cornerOffsets.emplace_back(p, -p);
+                    cornerOffsets.emplace_back(-p, p);
+                    cornerOffsets.emplace_back(-p, -p);
+                }
+            }
+        }
+
+#ifndef NDEBUG
         if (set->DebugMode && set->DrawDecals) {
             static auto* DebugAPI = DebugAPI_IMPL::DebugAPI::GetSingleton();
             RE::NiColorA colour{1, 1, 0, 1};  // Yellow
@@ -317,6 +364,7 @@ bool DecalUpdater::SpawnBurnDecalAtPosition(const RE::NiPoint3& worldPosition) {
             DebugAPI->DrawLineForMS(cornerPositions[0], cornerPositions[3], duration, colour, thickness);
             DebugAPI->DrawLineForMS(cornerPositions[1], cornerPositions[2], duration, colour, thickness);
         }
+#endif
 
         for (const auto& [dx, dy] : cornerOffsets) {
             RE::NiPoint3 cornerOrigin = position;
@@ -340,6 +388,7 @@ bool DecalUpdater::SpawnBurnDecalAtPosition(const RE::NiPoint3& worldPosition) {
                                                     0.0F);
 
             if (!havokWorld->PickObject(cornerPickData)) {
+#ifndef NDEBUG
                 if (set->DebugMode && set->DrawDecals) {
                     static auto* DebugAPI = DebugAPI_IMPL::DebugAPI::GetSingleton();
                     RE::NiColorA yellow{1 ,1, 0, 1};
@@ -347,12 +396,14 @@ bool DecalUpdater::SpawnBurnDecalAtPosition(const RE::NiPoint3& worldPosition) {
                     const float thickness = 2.0f;
                     DebugAPI->DrawLineForMS(cornerOrigin, cornerOrigin + ray, duration, yellow, thickness);
                 }
+#endif
                 continue;
             }
 
             const auto& cornerHit = cornerCollector.rayHit;
             const auto* cornerRoot = cornerHit.rootCollidable;
             if (!cornerRoot) {
+#ifndef NDEBUG
                 if (set->DebugMode && set->DrawDecals) {
                     static auto* DebugAPI = DebugAPI_IMPL::DebugAPI::GetSingleton();
                     RE::NiColorA yellow{1, 1, 0, 1};
@@ -360,6 +411,7 @@ bool DecalUpdater::SpawnBurnDecalAtPosition(const RE::NiPoint3& worldPosition) {
                     const float thickness = 2.0f;
                     DebugAPI->DrawLineForMS(cornerOrigin, cornerOrigin + ray, duration, yellow, thickness);
                 }
+#endif
                 continue;
             }
 
@@ -377,6 +429,7 @@ bool DecalUpdater::SpawnBurnDecalAtPosition(const RE::NiPoint3& worldPosition) {
                                          cornerHit.normal.quad.m128_f32[2]};
             cornerNormal.Unitize();
 
+#ifndef NDEBUG
             // Debug: draw raycast line (origin -> hit position) in white when enabled
             if (set->DebugMode && set->DrawDecals) {
                 static auto* DebugAPI = DebugAPI_IMPL::DebugAPI::GetSingleton();
@@ -385,6 +438,7 @@ bool DecalUpdater::SpawnBurnDecalAtPosition(const RE::NiPoint3& worldPosition) {
                 const float thickness = 2.0f;
                 DebugAPI->DrawLineForMS(cornerOrigin, cornerPosition, duration, white, thickness);
             }
+#endif
 
             RE::NiAVObject* cornerTarget3D{nullptr};
             auto cornerFilterInfo = cornerRoot->broadPhaseHandle.collisionFilterInfo;
@@ -406,6 +460,9 @@ bool DecalUpdater::SpawnBurnDecalAtPosition(const RE::NiPoint3& worldPosition) {
             } else {
                 cornerTarget3D = GethkpCollidable3D(cornerRoot);
             }
+            if (!cornerTarget3D) {
+                continue;
+            }
 
             // Create a copy of creationData and update normal/target/parentCell
             RE::BGSDecalManager::CreationData cornerCreation = creationData; // copy all params
@@ -422,12 +479,13 @@ bool DecalUpdater::SpawnBurnDecalAtPosition(const RE::NiPoint3& worldPosition) {
             // Add additional decal with the same visual parameters
             AddDecal(cornerCreation, true, nullptr);
         }
-    }
 
-    if (set->EnableTimeLogging) {
-        auto end = std::chrono::high_resolution_clock::now();
-        std::chrono::duration<double, std::milli> elapsed = end - start;
-        logger::info("Spawned decal in {} ms", elapsed.count());
+        if (set->EnableTimeLogging) {
+            auto end = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<double, std::milli> elapsed = end - start;
+            logger::info("[Main][DecalUpdater] Spawned decal on {} meshes in {} ms", processedRoots.size(),
+                         elapsed.count());
+        }
     }
 
     return true;
