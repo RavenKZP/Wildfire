@@ -59,6 +59,6 @@ void WildfireMgr::ProcessExplosion(RE::Explosion* a_explosion) {
     if (set->EnableTimeLogging) {
         auto end = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double, std::milli> elapsed = end - start;
-        logger::info("Process Explosion: base_damage {}, radius {} took {} ms", adj_damage, radius, elapsed.count());
+        logger::info("[Main][Process Explosion] Base_damage {}, radius {} took {} ms", adj_damage, radius, elapsed.count());
     }
 }

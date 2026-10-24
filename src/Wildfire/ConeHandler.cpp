@@ -65,7 +65,7 @@ void WildfireMgr::ProcessCone(RE::Projectile* a_proj) {
     if (set->EnableTimeLogging) {
         auto end = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double, std::milli> elapsed = end - start;
-        logger::info("Process Cone adj_damage {} took {} ms", adj_damage, elapsed.count());
+        logger::info("[Main] [Process Cone] Adj_damage {} took {} ms", adj_damage, elapsed.count());
     }
 }
 

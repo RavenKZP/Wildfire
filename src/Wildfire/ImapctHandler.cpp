@@ -65,7 +65,7 @@ void WildfireMgr::ProcessImpact(RE::Projectile* a_proj, RE::TESObjectREFR* a_ref
     if (set->EnableTimeLogging) {
         auto end = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double, std::milli> elapsed = end - start;
-        logger::info("Process Impact adj_damage {} took {} ms", adj_damage, elapsed.count());
+        logger::info("[Main][Process Impact] Adj_damage {} took {} ms", adj_damage, elapsed.count());
     }
 }
 
