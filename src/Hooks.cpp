@@ -5,7 +5,10 @@
 
 #include "SKSEMCP/SKSEMenuFramework.hpp"
 
+
+#ifndef NDEBUG
 #include "CLibUtilsQTR/DrawDebug.hpp"
+#endif
 
 
 namespace Hooks {
@@ -24,11 +27,12 @@ namespace Hooks {
                 if (set->EnableTimeLogging) {
                     auto end = std::chrono::high_resolution_clock::now();
                     std::chrono::duration<double, std::milli> elapsed = end - start;
-                    logger::info("WildfireMgr Update {}ms", elapsed.count());
+                    logger::info("[Main][Hooks] WildfireMgr Update {}ms", elapsed.count());
                 }
             }
 
             static float refresh = 0.0f;
+#ifndef NDEBUG
             if (set->DebugMode || refresh > 0.0f) {
                 DebugAPI_IMPL::DebugAPI::GetSingleton()->Update();
                 if (refresh <= 0.0f) {
@@ -37,6 +41,7 @@ namespace Hooks {
                     refresh -= a_delta;
                 }
             }
+#endif
         });
     }
 
@@ -57,10 +62,11 @@ namespace Hooks {
                 if (set->EnableTimeLogging) {
                     auto end = std::chrono::high_resolution_clock::now();
                     std::chrono::duration<double, std::milli> elapsed = end - FrameTime;
-                    logger::info("WildfireMgr Update {}ms", elapsed.count());
+                    logger::info("[Main][Hooks] WildfireMgr Update {}ms", elapsed.count());
                 }
             }
             static float refresh = 0.0f;
+#ifndef NDEBUG
             if (set->DebugMode || refresh > 0.0f) {
                 DebugAPI_IMPL::DebugAPI::GetSingleton()->Update();
                 if (refresh <= 0.0f) {
@@ -69,6 +75,7 @@ namespace Hooks {
                     refresh -= a_delta;
                 }
             }
+#endif
             lastFrameTime = FrameTime;
         });
     }
@@ -158,6 +165,11 @@ namespace Hooks {
     void ExplosionHook::InitializeExplosion(RE::Explosion* a_this) {
         originalInitializeExplosion(a_this);
         WildfireMgr::GetSingleton()->ProcessExplosion(a_this);
+    }
+
+    RE::NiAVObject* HazardLoadHook::Load3D(RE::TESObjectREFR* a_this, bool a_backgroundLoading) {
+        WildfireMgr::GetSingleton()->HazardLoad(a_this);
+        return Load3D_(a_this, a_backgroundLoading);
     }
 
 }  // namespace Hooks

@@ -82,6 +82,11 @@ namespace Hooks {
         static inline REL::Relocation<decltype(InitializeExplosion)> originalInitializeExplosion;
     };
 
+    struct HazardLoadHook {
+        static RE::NiAVObject* Load3D(RE::TESObjectREFR* a_this, bool a_backgroundLoading);
+        static inline REL::Relocation<decltype(Load3D)> Load3D_;
+    };
+
 
     inline void InstallHooks() {
 
@@ -132,6 +137,8 @@ namespace Hooks {
             REL::Relocation<std::uintptr_t>(RE::Explosion::VTABLE[0])
                 .write_vfunc(REL::Relocate(0xA2, 0xA2, 0xA3), ExplosionHook::InitializeExplosion);
 
+        HazardLoadHook::Load3D_ =
+            REL::Relocation<std::uintptr_t>(RE::VTABLE_Hazard[0]).write_vfunc(0x6A, HazardLoadHook::Load3D);
 
     }
 }  // namespace Hooks
