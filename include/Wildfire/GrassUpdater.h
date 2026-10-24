@@ -16,12 +16,13 @@ public:
     bool StartUpdate(GrassEventType& events, CellStateMapType& cellStateMap, WeatherData& wheatherData, float dellta);
 
     void OnGameLoad();
+    void CellLoaded(RE::TESObjectCELL* cell, CellState& state);
 
     bool IsRunning() const;
     std::optional<CellStateMapType> GetResult();
     void ClearResult();
 
-    void RegenerateGrass();
+    bool RegenerateGrass();
     void RegenerateGrassInCell(RE::TESObjectCELL* cell);
     void DarkenGrassShader(RE::TESObjectCELL* cell);
 

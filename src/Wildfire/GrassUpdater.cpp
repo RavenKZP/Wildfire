@@ -6,8 +6,11 @@
 #include "Utils.h"
 
 #include "CLibUtilsQTR/Tasker.hpp"
-// To be removed in release builds
+
+
+#ifndef NDEBUG
 #include "CLibUtilsQTR/DrawDebug.hpp"
+#endif
 
 GrassUpdater::GrassUpdater() : running_(false) {}
 
@@ -24,13 +27,42 @@ void GrassUpdater::OnGameLoad() {
     }
 }
 
+void GrassUpdater::CellLoaded(RE::TESObjectCELL* cell, CellState& state) {
+    static auto* set = Settings::GetSingleton();
+
+    for (int q = 0; q < CELL_QUAD_COUNT; ++q) {
+        for (int v = 0; v < VERTS_PER_QUAD; ++v) {
+            uint8_t minColor = set->MinGrassColorValue;
+            uint8_t colorValue = 255;
+
+            float maxDarkenByHeat = 0.5f;
+            if (state.isCharred[q][v]) {
+                // max dark and lower the grass to make it shorter
+                colorValue = static_cast<uint8_t>((255 * maxDarkenByHeat) - (255 * maxDarkenByHeat));
+                state.newHeights[q][v] = state.originalHeights[q][v] - set->GrassHeightDecrease;
+
+                colorValue = std::clamp(colorValue, minColor, static_cast<uint8_t>(255));
+                // Ensure we don't brighten the vertex if it's already darker (e.g., from a previous fire event)
+                for (int i = 0; i < RGB_CHANNELS; i++) {
+                    if (state.newColors[q][v][i] > colorValue) {
+                        state.newColors[q][v][i] = colorValue;
+                    }
+                }
+                state.altered[q][v] = true;
+            }
+        }
+    }
+}
+
 bool GrassUpdater::StartUpdate(GrassEventType& events, CellStateMapType& cellStateMap, WeatherData& wheatherData,
                                float delta) {
 
     static auto* set = Settings::GetSingleton();
 
     std::queue<RE::TESObjectCELL*> cellsToRemove;
-    for (auto& [cell, state] : cellStateMap) {
+    for (auto& cellstate : cellStateMap) {
+        RE::TESObjectCELL* cell = cellstate.first;
+        CellState& state = cellstate.second;
         if (!cell || !cell->IsAttached()) {
             cellsToRemove.push(cell);
             continue;  // Skip unattached cells, they will be removed from the map
@@ -48,6 +80,7 @@ bool GrassUpdater::StartUpdate(GrassEventType& events, CellStateMapType& cellSta
                     alteredFound = true;
                 }
 
+#ifndef NDEBUG
                 if (set->DebugMode && set->DrawLandscape && cell == RE::PlayerCharacter::GetSingleton()->GetParentCell()) {
                     auto* DebugAPI = DebugAPI_IMPL::DebugAPI::GetSingleton();
                     auto* tes = RE::TES::GetSingleton();
@@ -84,12 +117,15 @@ bool GrassUpdater::StartUpdate(GrassEventType& events, CellStateMapType& cellSta
                     DebugAPI->DrawLineForMS(p1, p3, set->DebugDrawDuration, colour, 1);
                     DebugAPI->DrawLineForMS(p2, p4, set->DebugDrawDuration, colour, 1);
                 }
+#endif
             }
         }
         if (alteredFound) {
-            logger::debug("Adding cell {:X} to update grass", cell->GetFormID());
+            if (set->EnableTimeLogging) {
+                logger::info("[Main][GrassUpdater] Adding cell {:X} to update grass", cell->GetFormID());
+            }
             std::unique_lock cellsLock(cellsToUpdateMutex);
-            cellsToUpdate.insert({cell, state});
+            cellsToUpdate.insert(cellstate);
         }
     }
     while (!cellsToRemove.empty()) {
@@ -144,8 +180,11 @@ CellStateMapType GrassUpdater::GrassUpdateLogic(GrassEventType grassEvents, Cell
                                                WeatherData wheatherData, float delta) {
     auto start = std::chrono::high_resolution_clock::now();
     auto* set = Settings::GetSingleton();
-    logger::info("[Thread] Starting grass update with {} grassEvents, {} cells in cellStateMap and {} delta", grassEvents.size(),
-                 cellStateMap.size(), delta);
+    if (set->EnableTimeLogging) {
+        logger::info(
+            "[Thread][GrassUpdater] Starting grass update with {} grassEvents, {} cells in cellStateMap and {} delta",
+            grassEvents.size(), cellStateMap.size(), delta);
+    }
 
     // Step 1 : Process each fire event and update the corresponding vertices in the cellStateMap
     for (const auto& event : grassEvents) {
@@ -233,7 +272,7 @@ CellStateMapType GrassUpdater::GrassUpdateLogic(GrassEventType grassEvents, Cell
     auto afterEvents = std::chrono::high_resolution_clock::now();
     if (set->EnableTimeLogging) {
         std::chrono::duration<double, std::milli> elapsed = afterEvents - start;
-        logger::info("[Thread] Processed {} fire grassEvents in {} ms", grassEvents.size(), elapsed.count());
+        logger::info("[Thread][GrassUpdater] Processed {} fire grassEvents in {} ms", grassEvents.size(), elapsed.count());
     }
 
     // Step 2 : Simulate fire spread and cooling for each vertex in the cellStateMap
@@ -355,7 +394,7 @@ CellStateMapType GrassUpdater::GrassUpdateLogic(GrassEventType grassEvents, Cell
     auto afterSpread = std::chrono::high_resolution_clock::now();
     if (set->EnableTimeLogging) {
         std::chrono::duration<double, std::milli> elapsed = afterSpread - afterEvents;
-        logger::info("[Thread] Simulated fire spread and cooling in {} ms", elapsed.count());
+        logger::info("[Thread][GrassUpdater] Simulated fire spread and cooling in {} ms", elapsed.count());
     }
 
     // Step 3 : Update colors for altered vertices in the cellStateMap based on their new state (burning, charred, etc.)
@@ -401,9 +440,9 @@ CellStateMapType GrassUpdater::GrassUpdateLogic(GrassEventType grassEvents, Cell
     auto afterColor = std::chrono::high_resolution_clock::now();
     if (set->EnableTimeLogging) {
         std::chrono::duration<double, std::milli> elapsed = afterColor - afterSpread;
-        logger::info("[Thread] Updated vertex colors and heights in {} ms", elapsed.count());
+        logger::info("[Thread][GrassUpdater] Updated vertex colors and heights in {} ms", elapsed.count());
         elapsed = afterColor - start;
-        logger::info("[Thread] Total grass update logic time: {} ms", elapsed.count());
+        logger::info("[Thread][GrassUpdater] Total grass update logic time: {} ms", elapsed.count());
     }
 
     return cellStateMap;
@@ -672,19 +711,22 @@ void GrassUpdater::LazyCreateCellState(CellStateMapType& cellStateMap) {
     });
 }
 
-void GrassUpdater::RegenerateGrass() {
+bool GrassUpdater::RegenerateGrass() {
     auto start = std::chrono::high_resolution_clock::now();
     static auto* set = Settings::GetSingleton();
+    bool regenerated = false;
     std::unique_lock lock(cellsToUpdateMutex);
 
     if (!cellsToUpdate.empty()) {  // One cell per frame
-        logger::debug("Cells To Update {} ", cellsToUpdate.size());
+        if (set->EnableTimeLogging) {
+            logger::info("[Main][GrassUpdater] Cells To Update {} ", cellsToUpdate.size());
+        }
         auto it = cellsToUpdate.begin();
         RE::TESObjectCELL* cellToApply = it->first;
         CellState& state = it->second;
-        logger::debug("Regenerate Grass In Cell {:X} ", cellToApply->GetFormID());
-        cellsToUpdate.erase(it);
-        lock.unlock();
+        if (set->EnableTimeLogging) {
+            logger::info("[Main][GrassUpdater] Regenerate Grass In Cell {:X} ", cellToApply->GetFormID());
+        }
 
         if (cellToApply) {
             auto land = cellToApply->GetLandscape();
@@ -693,19 +735,21 @@ void GrassUpdater::RegenerateGrass() {
                 std::memcpy(land->loadedData->heights, state.newHeights, sizeof(state.newHeights));
             }
             RegenerateGrassInCell(cellToApply);
-            
+            regenerated = true;
             if (land) {
                 std::memcpy(land->loadedData->colors, state.originalColors, sizeof(state.originalColors));
                 std::memcpy(land->loadedData->heights, state.originalHeights, sizeof(state.originalHeights));
             }
-            
         }
+        cellsToUpdate.erase(it);
+        lock.unlock();
     }
-    if (set->EnableTimeLogging) {
+    if (set->EnableTimeLogging && regenerated) {
         auto end = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double, std::milli> elapsed = end - start;
-        logger::info("RegenerateGrass took {} ms", elapsed.count());
+        logger::info("[Main][GrassUpdater] RegenerateGrass took {} ms", elapsed.count());
     }
+    return regenerated;
 }
 
 // This is where the magic happens - we tell the game to regenerate the grass in the specified cell
