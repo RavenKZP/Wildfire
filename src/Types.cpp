@@ -57,7 +57,7 @@ CellState::CellState(RE::TESObjectCELL* cell) {
     std::memset(altered, false, sizeof(altered));
 
     if (!cell) {
-        logger::error("CellState initialized with null cell pointer");
+        logger::error("[Types] CellState initialized with null cell pointer");
         return;
     }
 
@@ -65,12 +65,12 @@ CellState::CellState(RE::TESObjectCELL* cell) {
     if (coord) {
         cellAsCoordinates = CellAsCoords{coord->cellX, coord->cellY};
     } else {
-        logger::warn("CellState initialized with interior cell");
+        logger::warn("[Types] CellState initialized with interior cell");
     }
 
     auto cellLand = cell->GetLandscape();
     if (!cellLand) {
-        logger::warn("CellState ({}, {}) initialized with cell that has no cellLand data", cellAsCoordinates.cellX,
+        logger::warn("[Types] CellState ({}, {}) initialized with cell that has no cellLand data", cellAsCoordinates.cellX,
                       cellAsCoordinates.cellY);
         return;
     }
@@ -169,10 +169,12 @@ CellState::CellState(RE::TESObjectCELL* cell) {
     }
 
     valid = true;
-    auto end = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double, std::milli> elapsed = end - start;
-    logger::debug("Initialized CellState ({}, {}) in {} ms", cellAsCoordinates.cellX,
-                 cellAsCoordinates.cellY, elapsed.count());
+    if (set->EnableTimeLogging) {
+        auto end = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double, std::milli> elapsed = end - start;
+        logger::debug("[Types] Initialized CellState ({}, {}) in {} ms", cellAsCoordinates.cellX,
+                      cellAsCoordinates.cellY, elapsed.count());
+    }
 }
 
 RefState::RefState(RE::TESObjectREFR* ref) {
@@ -203,6 +205,7 @@ RefState::RefState(RE::TESObjectREFR* ref) {
     if (!base) {
         return;
     }
+    originalBaseObj = base;
 
     auto baseFormID = base->GetFormID();
     auto refFormID = ref->GetFormID();
@@ -250,7 +253,7 @@ RefState::RefState(RE::TESObjectREFR* ref) {
         if (set->EnableTimeLogging) {
             auto end = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double, std::milli> elapsed = end - start;
-            logger::info("Initialized RefState {:X} | burn:{} in {} ms", ref->GetFormID(), canBurn, elapsed.count());
+            logger::info("[Types] Initialized RefState {:X} | burn:{} in {} ms", ref->GetFormID(), canBurn, elapsed.count());
             return;
         }
     }
@@ -290,7 +293,7 @@ RefState::RefState(RE::TESObjectREFR* ref) {
     if (set->EnableTimeLogging) {
         auto end = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double, std::milli> elapsed = end - start;
-        logger::info("Initialized RefState {:X} | burn:{} fuel:{} underwater:{} in {} ms", ref->GetFormID(), canBurn,
+        logger::info("[Types] Initialized RefState {:X} | burn:{} fuel:{} underwater:{} in {} ms", ref->GetFormID(), canBurn,
                       fuel, isUnderwater, elapsed.count());
     }
 }

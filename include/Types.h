@@ -136,6 +136,7 @@ struct RefState {
 
     RefType type;
     RE::TESBoundObject* baseObjectSwap;
+    RE::TESBoundObject* originalBaseObj;
 
     RefState(RE::TESObjectREFR* ref);
 };
