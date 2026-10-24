@@ -2,8 +2,11 @@
 #include "Wildfire/Weather.h"
 
 #include "CLibUtilsQTR/Tasker.hpp"
-// To be removed in release builds
+
+#ifndef NDEBUG
 #include "CLibUtilsQTR/DrawDebug.hpp"
+#endif
+
 #include "SKSEMCP/SKSEMenuFramework.hpp"
 
 #include "Settings.h"
@@ -38,6 +41,7 @@ void WildfireMgr::OnGameLoad() {
     // Internal Refs Cleanup
     {
         std::lock_guard lock(refStateMutex);
+        refUpdater.ResetAllObjects(refStateMap);
         refStateMap.clear();
     }
     {
@@ -69,6 +73,41 @@ void WildfireMgr::OnGameLoad() {
     // from SKSE's serialization system
 }
 
+void WildfireMgr::AddCellState(RE::TESObjectCELL* cell, CellState& state) {
+    if (!cell) {
+        return;
+    }
+    grassUpdater.CellLoaded(cell, state);
+    std::lock_guard lock(cellStateMutex);
+    cellStateMap.insert_or_assign(cell, std::move(state));
+}
+
+void WildfireMgr::AddRefState(RE::TESObjectREFR* ref, RefState& state) {
+    if (!ref) {
+        return;
+    }
+    refUpdater.RefLoaded(ref, state);
+    std::lock_guard lock(refStateMutex);
+    refStateMap.insert_or_assign(ref->GetHandle(), std::move(state));
+}
+
+void WildfireMgr::HazardLoad(RE::TESObjectREFR* a_ref) {
+    return; // Temporary
+    auto base = a_ref->GetBaseObject();
+    if (auto modFile = base->GetFile()) {
+        auto Filename = modFile->GetFilename();
+        if (modFile->GetFilename() == "Wildfire.esp") {
+            if (hazardUpdater.HazardLoaded(a_ref)) {
+                // logger::debug("[Main][WildfireMgr] Fire or Smoke Hazard added to hazardUpdater");
+                // it's Fire or Smoke, Hazard Updater will handle this
+            } else {
+                // it's not Fire or Smoke so it must be Dummy Fadeing Ref, no need to handle anyting
+                // refUpdater.HazardLoaded(a_ref);
+            }
+        }
+    }
+}
+
 void WildfireMgr::OnGameSave() {
     // Save the 
     //      cellStateMap 
@@ -77,7 +116,7 @@ void WildfireMgr::OnGameSave() {
     //      refEventQueue
     // to SKSE's serialization system
 
-    // Important effect shaders are saved by vanilla skyrim serialization system
+    // Important: effect shaders are saved by vanilla skyrim serialization system
 }
 
 CellStateMapType WildfireMgr::GetCellStateMapCopy() {
@@ -130,10 +169,10 @@ void WildfireMgr::HazardUpdate() {
             hazardUpdater.ClearResult();
         }
         if (!hazardUpdater.StartUpdate(cellStateMap, refStateMap)) {
-            logger::warn("Hazard update still running, spawning on previous positions");
+            logger::warn("[Main][WildfireMgr] Hazard update still running");
         }
     } else {
-        logger::warn("Hazard update still running, spawning on previous positions");
+        logger::warn("[Main][WildfireMgr] Hazard update still running");
     }
 }
 
@@ -171,8 +210,13 @@ static void LogPeriodicUpdateTime(std::chrono::steady_clock::time_point start) {
     if (set->EnableTimeLogging) {
         auto end = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double, std::milli> elapsed = end - start;
-        logger::info("Whole WildfireMgr::PeriodicUpdate took {} ms", elapsed.count());
+        logger::info("[Main][WildfireMgr] Whole WildfireMgr::PeriodicUpdate took {} ms", elapsed.count());
     }
+}
+
+static float elapsedMs(std::chrono::steady_clock::time_point frameStart) {
+    auto now = std::chrono::high_resolution_clock::now();
+    return std::chrono::duration<double, std::milli>(now - frameStart).count();
 }
 
 void WildfireMgr::PeriodicUpdate(float delta) {
@@ -190,6 +234,7 @@ void WildfireMgr::PeriodicUpdate(float delta) {
     hazardTimer += delta;
     refTimer += delta;
 
+#ifndef NDEBUG
     if (set->DebugMode && set->DrawWind) {
         static auto* DebugAPI = DebugAPI_IMPL::DebugAPI::GetSingleton();
         static auto* player = RE::PlayerCharacter::GetSingleton();
@@ -216,6 +261,7 @@ void WildfireMgr::PeriodicUpdate(float delta) {
             DebugAPI->DrawLineForMS(p0, p2, set->DebugDrawDuration, {1, 0, 0, 1}, 1);
         }
     }
+#endif
 
     hazardUpdater.ManageHazards();
     refUpdater.TransformObjects(delta);
@@ -238,9 +284,9 @@ void WildfireMgr::PeriodicUpdate(float delta) {
             static int consecutiveRuns = 0;
             consecutiveRuns++;
             if (consecutiveRuns >= 5) {
-                logger::error("Grass update has been running for {} consecutive updates.", consecutiveRuns);
+                logger::error("[Main][WildfireMgr] Grass update has been running for {} consecutive updates.", consecutiveRuns);
             } else {
-                logger::warn("Grass update still running");
+                logger::warn("[Main][WildfireMgr] Grass update still running");
             }
         }
         // If GrassUpdate returns false, we not reset the timer to try again next frame
@@ -257,16 +303,31 @@ void WildfireMgr::PeriodicUpdate(float delta) {
             static int consecutiveRuns = 0;
             consecutiveRuns++;
             if (consecutiveRuns >= 5) {
-                logger::error("References update has been running for {} consecutive updates.", consecutiveRuns);
+                logger::error("[Main][WildfireMgr] References update has been running for {} consecutive updates.", consecutiveRuns);
             } else {
-                logger::warn("References update still running");
+                logger::warn("[Main][WildfireMgr] References update still running");
             }
         }
         // If RefUpdate returns false, we not reset the timer to try again next frame
         // This allows us to handle cases where we have more events than we can process in one update
     }
 
-    grassUpdater.RegenerateGrass();
+    auto decalAndSmokeStart = std::chrono::high_resolution_clock::now();
+    while (!decalAndSmokeQueue.empty()) {
+        auto& pos = decalAndSmokeQueue.front();
+        hazardUpdater.SpawnSmokeHazardAt(pos);
+        decalUpdater.SpawnBurnDecalAtPosition(pos);
+        decalAndSmokeQueue.pop();
+        if (elapsedMs(decalAndSmokeStart) > 1.0f) {
+            logger::warn("[Main][WildfireMgr] Out of time budget while spawning Decal and Smoke");
+            return LogPeriodicUpdateTime(start);
+        }
+    }
+
+    if (grassUpdater.RegenerateGrass()) {
+        return LogPeriodicUpdateTime(start);
+    }
+
     return LogPeriodicUpdateTime(start);
 }
 
@@ -286,6 +347,7 @@ void WildfireMgr::AddGrassEvent(const RE::NiPoint3& impactPos, float radius, flo
             return RE::BSContainer::ForEachResult::kContinue;
         });
 
+#ifndef NDEBUG
         if (set->DebugMode && set->DrawImpacts) {
             RE::NiColorA colour{0, 1, 0, 1};  // Green
             switch (type) {
@@ -305,6 +367,7 @@ void WildfireMgr::AddGrassEvent(const RE::NiPoint3& impactPos, float radius, flo
             static auto* DebugAPI = DebugAPI_IMPL::DebugAPI::GetSingleton();
             DebugAPI->DrawSphere(impactPos, radius, set->DebugDrawDuration, colour);
         }
+#endif
     }
 }
 
@@ -328,6 +391,7 @@ void WildfireMgr::AddRefEvent(RE::TESObjectREFR* ref, float damage, ElementType 
             refUpdater.GetOrCreateRefState(refStateMap, ref->GetHandle());
         }
 
+#ifndef NDEBUG
         if (set->DebugMode && set->DrawImpacts) {
             RE::NiColorA colour{0, 1, 0, 1};  // Green
             switch (type) {
@@ -350,6 +414,7 @@ void WildfireMgr::AddRefEvent(RE::TESObjectREFR* ref, float damage, ElementType 
             p1.z += 50;
             DebugAPI->DrawLineForMS(p0, p1, set->DebugDrawDuration, colour, 10);
         }
+#endif
     }
 }
 
@@ -380,13 +445,17 @@ void WildfireMgr::SendHitEvent(RE::TESObjectREFR* ref) {
 }
 
 void WildfireMgr::ReferenceBurned(const RE::NiPoint3& position) {
-    hazardUpdater.SpawnSmokeHazardAt(position);
-    decalUpdater.SpawnBurnDecalAtPosition(position);
+    decalAndSmokeQueue.push(position);
+
+    //hazardUpdater.SpawnSmokeHazardAt(position);
+    //decalUpdater.SpawnBurnDecalAtPosition(position);
 }
 
 void WildfireMgr::GrassBurned(const RE::NiPoint3& position) {
-    hazardUpdater.SpawnSmokeHazardAt(position);
-    decalUpdater.SpawnBurnDecalAtPosition(position);
+    decalAndSmokeQueue.push(position);
+
+    //hazardUpdater.SpawnSmokeHazardAt(position);
+    //decalUpdater.SpawnBurnDecalAtPosition(position);
 }
 
 void WildfireMgr::SetHazardsPCOnly(bool PCOnly) { hazardUpdater.SetHazardsPCOnly(PCOnly); }

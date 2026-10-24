@@ -16,6 +16,8 @@ public:
 
     void PeriodicUpdate(float delta);
 
+    void HazardLoad(RE::TESObjectREFR* a_ref);
+
     bool GrassUpdate(float delta);
     void HazardUpdate();
     bool RefUpdate(float delta);
@@ -37,10 +39,14 @@ public:
 
     void SetHazardsPCOnly(bool PCOnly);
 
+    //Caled BEFORE Serialization Load
     void OnGameLoad();
+    void AddCellState(RE::TESObjectCELL* cell, CellState& state);
+    void AddRefState(RE::TESObjectREFR* ref, RefState& state);
+
     void OnGameSave();
 
-    // For MCP debug
+
     CellStateMapType GetCellStateMapCopy();
     RefStateMapType GetRefStateMapCopy();
 
@@ -60,6 +66,8 @@ private:
     // List of burning references and their state
     mutable std::mutex refStateMutex;
     RefStateMapType refStateMap;
+
+    std::queue<RE::NiPoint3> decalAndSmokeQueue;
 
     GrassUpdater grassUpdater;
     HazardUpdater hazardUpdater;
