@@ -358,10 +358,44 @@ bool ReferenceUpdater::StartUpdate(RefEventType& refEvents, RefStateMapType& bur
 
                 float ratio = aboveWaterHeight / totalHeight;
 
-                if (ratio <= set->UnderwaterRatio) {
-                    state.isUnderwater = true;
-                } else {
-                    state.isUnderwater = false;
+                auto formType = ref->GetBaseObject()->GetFormType();
+                switch (formType) {
+                    // Moveable objects can just touch water to be considered underwater
+                    case RE::FormType::Scroll:
+                    case RE::FormType::Armor:
+                    case RE::FormType::Book:
+                    case RE::FormType::Ingredient:
+                    case RE::FormType::Misc:
+                    case RE::FormType::MovableStatic:
+                    case RE::FormType::Weapon:
+                    case RE::FormType::Ammo:
+                    case RE::FormType::KeyMaster:
+                    case RE::FormType::AlchemyItem:
+                    case RE::FormType::Note:
+                    case RE::FormType::SoulGem:
+                        if (ratio <= 0.9f) {  
+                            state.isUnderwater = true;
+                        } else {
+                            state.isUnderwater = false;
+                        }
+                        break;
+                        
+                    // No Moveable
+                    case RE::FormType::Activator:
+                    case RE::FormType::TalkingActivator:
+                    case RE::FormType::Container:
+                    case RE::FormType::Door:
+                    case RE::FormType::Static:
+                    case RE::FormType::StaticCollection:
+                    case RE::FormType::Tree:
+                    case RE::FormType::Flora:
+                    case RE::FormType::Furniture:
+                    default:
+                        if (ratio <= set->UnderwaterRatio) {
+                            state.isUnderwater = true;
+                        } else {
+                            state.isUnderwater = false;
+                        }
                 }
             }
         }
