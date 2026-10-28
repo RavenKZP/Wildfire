@@ -64,14 +64,10 @@ CellState::CellState(RE::TESObjectCELL* cell) {
     auto coord = cell->GetCoordinates();
     if (coord) {
         cellAsCoordinates = CellAsCoords{coord->cellX, coord->cellY};
-    } else {
-        logger::warn("[Types] CellState initialized with interior cell");
     }
 
     auto cellLand = cell->GetLandscape();
     if (!cellLand) {
-        logger::warn("[Types] CellState ({}, {}) initialized with cell that has no cellLand data", cellAsCoordinates.cellX,
-                      cellAsCoordinates.cellY);
         return;
     }
 
