@@ -232,7 +232,6 @@ namespace Serialization {
 
             if (errored) {
                 logger::error("[Serialization] failed to load CELL data from SKSE co-save");
-                RE::DebugMessageBox("Wildfire Error: Failed to load CELL data from SKSE co-save");
             } else {
                 state.valid = true;
 
@@ -337,7 +336,6 @@ namespace Serialization {
 
             if (errored) {
                 logger::error("[Serialization] failed to load REFS data from SKSE co-save");
-                RE::DebugMessageBox("Wildfire Error: Failed to load REFS data from SKSE co-save");
             } else {
                 manager->AddRefState(ref, state);
             }
