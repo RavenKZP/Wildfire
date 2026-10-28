@@ -586,7 +586,6 @@ namespace MCP {
         if (ImGuiMCP::BeginTable("RefStatesTable", 7,
                                  ImGuiMCP::ImGuiTableFlags_Borders | ImGuiMCP::ImGuiTableFlags_RowBg |
                                      ImGuiMCP::ImGuiTableFlags_ScrollY)) {
-            ImGuiMCP::TableSetupColumn("Handle");
             ImGuiMCP::TableSetupColumn("RefID");
             ImGuiMCP::TableSetupColumn("Heat");
             ImGuiMCP::TableSetupColumn("Fuel");
@@ -602,15 +601,12 @@ namespace MCP {
                 RE::TESObjectREFR* ref = handle.get().get();
 
                 ImGuiMCP::TableSetColumnIndex(0);
-                ImGuiMCP::Text("%X", handle.native_handle());
-
-                ImGuiMCP::TableSetColumnIndex(1);
                 if (ref)
                     ImGuiMCP::Text("%X", ref->GetFormID());
                 else
                     ImGuiMCP::TextDisabled("Dead");
 
-                ImGuiMCP::TableSetColumnIndex(2);
+                ImGuiMCP::TableSetColumnIndex(1);
 
                 ImGuiMCP::ImVec4 heatColor = ImGuiMCP::ImVec4(0.8f, 0.8f, 0.8f, 1.0f);
                 if (state.isBurning)
@@ -624,10 +620,10 @@ namespace MCP {
                 ImGuiMCP::Text("%.1f", state.heat);
                 ImGuiMCP::PopStyleColor();
 
-                ImGuiMCP::TableSetColumnIndex(3);
+                ImGuiMCP::TableSetColumnIndex(2);
                 ImGuiMCP::Text("%.1f / %.1f", state.fuel, state.initialFuel);
 
-                ImGuiMCP::TableSetColumnIndex(4);
+                ImGuiMCP::TableSetColumnIndex(3);
 
                 if (state.isCharred)
                     ImGuiMCP::TextColored({0, 0, 0, 1}, "CHARRED");
@@ -638,7 +634,7 @@ namespace MCP {
                 else
                     ImGuiMCP::Text("Idle");
 
-                ImGuiMCP::TableSetColumnIndex(5);
+                ImGuiMCP::TableSetColumnIndex(4);
 
                 std::string flags;
                 if (state.canBurn) flags += "CanBurn ";
@@ -646,7 +642,7 @@ namespace MCP {
 
                 ImGuiMCP::Text("%s", flags.c_str());
 
-                ImGuiMCP::TableSetColumnIndex(6);
+                ImGuiMCP::TableSetColumnIndex(5);
                 ImGuiMCP::Text("(%.0f %.0f %.0f)", state.position.x, state.position.y, state.position.z);
 
                 // Expandable debug block
