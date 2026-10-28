@@ -69,6 +69,7 @@ DecalUpdater::DecalUpdater() {
     if (defaultImpactDataSet) {
         logger::info("[DecalUpdater] Fire Impact Data Set found and loaded.");
     } else {
+        Settings::GetSingleton()->ModActive = false;
         logger::error("[DecalUpdater] Fire Impact Data Set not found. Please make sure Wildfire.esp is active");
         RE::DebugMessageBox("Wildfire Error: Fire Impact Data Set not found. Please make sure Wildfire.esp is active");
     }

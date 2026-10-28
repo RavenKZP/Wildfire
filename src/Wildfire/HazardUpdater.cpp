@@ -19,12 +19,13 @@ HazardUpdater::HazardUpdater() : running_(false) {
     Wildfire_MediumHazard = RE::TESForm::LookupByEditorID<RE::BGSHazard>("Wildfire_MediumHazard");
     Wildfire_SmallHazard = RE::TESForm::LookupByEditorID<RE::BGSHazard>("Wildfire_SmallHazard");
 
+    auto* set = Settings::GetSingleton();
     if (Wildfire_LargeHazard && Wildfire_BigHazard && Wildfire_MediumHazard && Wildfire_SmallHazard) {
-        auto* set = Settings::GetSingleton();
         SetHazardsPCOnly(set->HazardAffectPCOnly);
         SetHazardsLifetine(set->HazardPeriodicUpdateTime*1.1f);
         logger::info("[HazardUpdater] Fire Hazard forms found and loaded.");
     } else {
+        set->ModActive = false;
         logger::error("[HazardUpdater] Fire Hazard forms not found. Please make sure Wildfire.esp is active");
         RE::DebugMessageBox(
             "Wildfire Error: Fire Hazard forms not found. Please make sure Wildfire.esp is active");
@@ -51,6 +52,7 @@ HazardUpdater::HazardUpdater() : running_(false) {
         if (SmokeHazard) {
             Wildfire_SmokeHazards.push_back(SmokeHazard);
         } else {
+            set->ModActive = false;
             logger::error("[HazardUpdater] Smoke Hazard forms not found. Please make sure Wildfire.esp is active");
             RE::DebugMessageBox("Wildfire Error: Smoke Hazard forms not found. Please make sure Wildfire.esp is active");
             return;
@@ -496,7 +498,7 @@ static bool IsVisible(const RE::NiPoint3& pos, const RE::NiPoint3& camPos, const
              auto fade = ramainAge / 5.0f;
              if (auto haz3D = hazard->Get3D()) {
                  if (auto hazFadeNode = haz3D->AsFadeNode()) {
-                     hazFadeNode->fadeAmount = fade;
+                     hazFadeNode->GetFadeAmount() = fade;
                  }
              }
          }

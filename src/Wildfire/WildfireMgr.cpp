@@ -14,7 +14,6 @@
 
 WildfireMgr::WildfireMgr() { 
     auto* set = Settings::GetSingleton();
-    SetHazardsLifetine(set->HazardPeriodicUpdateTime);
 }
 
 void WildfireMgr::OnGameLoad() {
@@ -316,7 +315,14 @@ void WildfireMgr::PeriodicUpdate(float delta) {
     while (!decalAndSmokeQueue.empty()) {
         auto& pos = decalAndSmokeQueue.front();
         hazardUpdater.SpawnSmokeHazardAt(pos);
-        decalUpdater.SpawnBurnDecalAtPosition(pos);
+
+        if (decalUpdater.SpawnBurnDecalAtPosition(pos)) {
+            // Successful decal spawn
+        } else {
+            if (set->EnableTimeLogging) {
+                logger::warn("[Main][WildfireMgr] Failed to spawn decal");
+            }
+        }
         decalAndSmokeQueue.pop();
         if (elapsedMs(decalAndSmokeStart) > 1.0f) {
             logger::warn("[Main][WildfireMgr] Out of time budget while spawning Decal and Smoke");

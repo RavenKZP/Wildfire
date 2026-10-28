@@ -56,6 +56,10 @@ static void SendFireEventsAcrossBounds(RefState refState, float wheatherFactor) 
     float dy = (bounds[3] - bounds[0]).Length();
     float dz = (bounds[4] - bounds[0]).Length();
 
+    dx = std::clamp(dx, 0.01f, 1000.0f);
+    dy = std::clamp(dy, 0.01f, 1000.0f);
+    dz = std::clamp(dz, 0.01f, 1000.0f);
+
     std::array<float, 3> dims = {dx, dy, dz};
     std::sort(dims.begin(), dims.end());
     float minDim = dims[0];
@@ -153,7 +157,7 @@ static void FadeAlphaGeometryRecursive(RE::NiAVObject* obj) {
         auto& geomData = triShape->GetGeometryRuntimeData();
         auto& prop = geomData.alphaProperty;
         if (prop) {
-            triShape->fadeAmount = 0.5f;
+            triShape->GetFadeAmount() = 0.5f;
         }
     }
 
@@ -232,9 +236,11 @@ ReferenceUpdater::ReferenceUpdater() : running_(false) {
         }
     }
 
+    auto* set = Settings::GetSingleton();
     if (CharredFXS && CharredInstantFXS && BurningFXS && FrostFXS && EmptyFXS && DesintegrateFXS) {
         logger::info("[ReferenceUpdater] Effect shaders forms found and loaded.");
     } else {
+        set->ModActive = false;
         logger::error("[ReferenceUpdater] Effect shaders forms not found. Please make sure Wildfire.esp is active");
         RE::DebugMessageBox("Wildfire Error: Effect shaders forms not found. Please make sure Wildfire.esp is active");
     }
@@ -242,6 +248,7 @@ ReferenceUpdater::ReferenceUpdater() : running_(false) {
     if (!DefaultBurnedBranches.empty()) {
         logger::info("[ReferenceUpdater] Burned branches forms found and loaded. (count={}).", DefaultBurnedBranches.size());
     } else {
+        set->ModActive = false;
         logger::error("[ReferenceUpdater] Burned branches forms not found. Please make sure Wildfire.esp is active");
         RE::DebugMessageBox("Wildfire Error: Burned branches forms not found. Please make sure Wildfire.esp is active");
     }
@@ -249,6 +256,7 @@ ReferenceUpdater::ReferenceUpdater() : running_(false) {
     if (!DummyHazards.empty()) {
         logger::info("[ReferenceUpdater] Dummy Hazard(s) found and loaded (count={}).", DummyHazards.size());
     } else {
+        set->ModActive = false;
         logger::error("[ReferenceUpdater] No Dummy Hazards found. Please make sure Wildfire.esp is active");
         RE::DebugMessageBox("Wildfire Error: Dummy Hazard not found. Please make sure Wildfire.esp is active");
     }
@@ -592,9 +600,11 @@ RefStateMapType ReferenceUpdater::ReferenceUpdateLogic(RefEventType refEvents, R
         if (state.isCharred) {
             continue;
         } else if (state.isBurning) {
-            if (state.isUnderwater) {
+            // allow underwater "burn" if not actual burn
+            if (state.isUnderwater && state.initialFuel > 0.0f) {
                 state.isBurning = false;
                 state.heat = 0.0f;
+
                 TaskInterface->AddTask([this, refHandle]() {
                     if (auto ref = refHandle.get().get()) {
                         RemoveFX(ref);

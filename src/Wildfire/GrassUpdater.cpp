@@ -759,12 +759,16 @@ void GrassUpdater::RegenerateGrassInCell(RE::TESObjectCELL* cell) {
         auto grassMgr = RE::BGSGrassManager::GetSingleton();
         //DarkenGrassShader(cell);
 
-        std::uint8_t flag = 0;  // Has to be 0, its something like cancel flag...
-        REL::Relocation<std::uint8_t*> GrassFadeFlag{REL::RelocationID(501130, 359446)};
-        *GrassFadeFlag = false;  // This disable grass fade-in effect, so grass pop in imidietally
+        volatile bool flag = false;
+        /* I'm stupid all it takes is to add Wildfire.ini with the following line to disable grass fade-in effect
+        [Grass]
+        bEnableGrassFade=0
+        */
+        //REL::Relocation<std::uint8_t*> GrassFadeFlag{REL::RelocationID(501130, 359446)};
+        //*GrassFadeFlag = false;  // This disable grass fade-in effect, so grass pop in imidietally
 
-        grassMgr->RemoveGrassInCell(cell);
-        grassMgr->CreateGrassInCell(cell, &flag);  // flag is something like cancel flag if true no grass is generated
+        grassMgr->RemoveCellGrass(cell);
+        grassMgr->AddCellGrass(cell, &flag);
         grassMgr->ExecuteAllGrassTasks(cell, 0);  // actually apply grass to scene?
                                                    // 2'nd argument is just set to 1 internally (no matter what we pass)
 
